@@ -5,7 +5,7 @@ servicePort: 8980
 
 # Default: null, open a port for prometheus monitoring tool, if set, user can check the
 # performance using prometheus
-monitorPort: 1237
+# monitorPort: 1237
 
 # default: null, must be provided, item column name
 itemIDColumn: tweet_id

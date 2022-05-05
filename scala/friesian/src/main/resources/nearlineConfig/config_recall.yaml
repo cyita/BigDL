@@ -4,12 +4,12 @@
 indexDim: 50
 
 # default: null, path to saved index path, must be provided
-indexPath: ./item_50.idx
+indexPath: mnt/item.idx
 
 itemIDColumn: tweet_id
 itemEmbeddingColumn: prediction
 
 # default: null, Only support parquet file
-initialDataPath: /home/yina/Documents/data/friesian-demo/vec_feature_item_prediction.parquet
+initialDataPath: mnt/vec_feature_item_prediction.parquet
 
 part: 27
