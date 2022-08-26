@@ -15,6 +15,9 @@
 #
 import math
 import os.path
+import time
+
+from memory_profiler import profile
 
 from pyspark.sql import DataFrame
 
@@ -90,6 +93,7 @@ class OpenvinoEstimator(SparkEstimator):
         schema = None
 
         def partition_inference(partition):
+            t1 = time.time()
             model_bytes = model_bytes_broadcast.value
             weight_bytes = weight_bytes_broadcast.value
             ie = IECore()
@@ -101,7 +105,10 @@ class OpenvinoEstimator(SparkEstimator):
             local_model = ie.load_network(network=net, device_name="CPU",
                                           num_requests=1)
             infer_request = local_model.requests[0]
+            t2 = time.time()
+            print("\n--------- load model: ", t2 - t1)
 
+            # @profile
             def add_elem(d):
                 d_len = len(d)
                 if d_len < batch_size:
@@ -111,6 +118,7 @@ class OpenvinoEstimator(SparkEstimator):
                 else:
                     return d, d_len
 
+            @profile
             def generate_output_row(batch_input_dict):
                 input_dict = dict()
                 for col, input in zip(feature_cols, input_cols):
@@ -131,7 +139,9 @@ class OpenvinoEstimator(SparkEstimator):
                     elif isinstance(value[0], DenseVector):
                         input_dict[input], elem_num = add_elem(value.values.astype(np.float32))
 
+                t5 = time.time()
                 infer_request.infer(input_dict)
+                t6 = time.time()
                 if len(outputs) == 1:
                     pred = infer_request.output_blobs[outputs[0]].buffer[:elem_num]
                     pred = [[np.expand_dims(output, axis=0).tolist()] for output in pred]
@@ -142,6 +152,8 @@ class OpenvinoEstimator(SparkEstimator):
                     pred = [list(np.expand_dims(output, axis=0).tolist()
                                  for output in single_result)
                             for single_result in zip(*pred)]
+                t7 = time.time()
+                print("\n------------------------ inference, prepare pred ", t6 - t5, t7 - t6)
                 return pred
 
             if not is_df:
@@ -175,20 +187,30 @@ class OpenvinoEstimator(SparkEstimator):
                     for col in feature_cols:
                         batch_dict[col].append(row[col])
                     if cnt >= batch_size:
+                        t3 = time.time()
                         pred = generate_output_row(batch_dict)
+                        t4 = time.time()
+                        print("------------------ pred batch data ", t4 - t3)
                         for r, p in zip(batch_row, pred):
                             row = Row(*([r[col] for col in r.__fields__] + p))
                             yield row
+                        del pred
                         batch_dict = {col: [] for col in feature_cols}
                         batch_row = []
                         cnt = 0
                 if cnt > 0:
+                    t3 = time.time()
                     pred = generate_output_row(batch_dict)
+                    t4 = time.time()
+                    print("\n------------------ pred batch data ", t4 - t3)
                     for r, p in zip(batch_row, pred):
                         row = Row(*([r[col] for col in r.__fields__] + p))
                         yield row
+                    del pred
             del local_model
             del net
+            t8 = time.time()
+            print("************** partition total ", t8 - t1)
 
         def predict_transform(dict_data, batch_size):
             invalidInputError(isinstance(dict_data, dict), "each shard should be an dict")
