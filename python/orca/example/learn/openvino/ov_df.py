@@ -8,7 +8,7 @@ sc = init_orca_context(cores=4, memory="5g", conf={"spark.driver.maxResultSize":
 
 spark1 = OrcaContext.get_spark_session()
 
-rdd = sc.range(0, 54, numSlices=2)
+rdd = sc.range(0, 54, numSlices=1)
 df = rdd.map(lambda x: [x, np.random.rand(907500).tolist()]).toDF(["index", "input"])
 
 
@@ -28,11 +28,11 @@ OrcaContext._eager_mode = False
 est = Estimator.from_openvino(
 	model_path='/home/yina/Documents/data/myissue/openvino_model/FP32/model_float32.xml')  # load model
 
-result_df = est.predict(df, feature_cols=["input"], batch_size=4)
+result_df = est.predict(df, feature_cols=["input"], batch_size=16, df_return_rdd_of_numpy_dict=True)
+# result_df = result_df.drop("input")
+c = result_df.collect()
 # df.show()
 # result_df.show()
-result_df = result_df.drop("input")
-c = result_df.collect()
 c
 print("end")
 

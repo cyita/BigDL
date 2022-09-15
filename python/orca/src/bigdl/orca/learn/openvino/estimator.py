@@ -56,7 +56,8 @@ class OpenvinoEstimator(SparkEstimator):
         """
         invalidInputError(False, "not implemented")
 
-    def predict(self, data, feature_cols=None, batch_size=4, input_cols=None):
+    def predict(self, data, feature_cols=None, batch_size=4, input_cols=None,
+                df_return_rdd_of_numpy_dict=False):
         """
         Predict input data
 
@@ -108,7 +109,6 @@ class OpenvinoEstimator(SparkEstimator):
             t2 = time.time()
             print("\n--------- load model: ", t2 - t1)
 
-            # @profile
             def add_elem(d):
                 d_len = len(d)
                 if d_len < batch_size:
@@ -120,6 +120,7 @@ class OpenvinoEstimator(SparkEstimator):
 
             @profile
             def generate_output_row(batch_input_dict):
+                t10 = time.time()
                 input_dict = dict()
                 for col, input in zip(feature_cols, input_cols):
                     value = batch_input_dict[col]
@@ -140,18 +141,33 @@ class OpenvinoEstimator(SparkEstimator):
                         input_dict[input], elem_num = add_elem(value.values.astype(np.float32))
 
                 t5 = time.time()
+                print("\n**** input time ", t5 - t10)
                 infer_request.infer(input_dict)
                 t6 = time.time()
                 if len(outputs) == 1:
                     pred = infer_request.output_blobs[outputs[0]].buffer[:elem_num]
-                    pred = [[np.expand_dims(output, axis=0).tolist()] for output in pred]
+                    if df_return_rdd_of_numpy_dict:
+                        pred = [[np.expand_dims(output, axis=0)] for output in pred]
+                    else:
+                        pred = [[np.expand_dims(output, axis=0).tolist()] for output in pred]
                 else:
                     pred = list(map(lambda output:
                                     infer_request.output_blobs[output].buffer[:elem_num],
                                     outputs))
-                    pred = [list(np.expand_dims(output, axis=0).tolist()
-                                 for output in single_result)
-                            for single_result in zip(*pred)]
+                    # pred = [list(np.expand_dims(output, axis=0).tolist()
+                    #              for output in single_result)
+                    #         for single_result in zip(*pred)]
+                    temp_r = []
+                    for i in range(elem_num):
+                        single_r = []
+                        for p in pred:
+                            if df_return_rdd_of_numpy_dict:
+                                single_r.append(np.expand_dims(p[i], axis=0))
+                            else:
+                                single_r.append(np.expand_dims(p[i], axis=0).tolist())
+                        temp_r.append(single_r)
+                    pred = temp_r
+
                 t7 = time.time()
                 print("\n------------------------ inference, prepare pred ", t6 - t5, t7 - t6)
                 return pred
@@ -191,9 +207,13 @@ class OpenvinoEstimator(SparkEstimator):
                         pred = generate_output_row(batch_dict)
                         t4 = time.time()
                         print("------------------ pred batch data ", t4 - t3)
-                        for r, p in zip(batch_row, pred):
-                            row = Row(*([r[col] for col in r.__fields__] + p))
-                            yield row
+                        if df_return_rdd_of_numpy_dict:
+                            for p in pred:
+                                yield {output_name: o_p for output_name, o_p in zip(outputs, p)}
+                        else:
+                            for r, p in zip(batch_row, pred):
+                                row = Row(*([r[col] for col in r.__fields__] + p))
+                                yield row
                         del pred
                         batch_dict = {col: [] for col in feature_cols}
                         batch_row = []
@@ -203,6 +223,9 @@ class OpenvinoEstimator(SparkEstimator):
                     pred = generate_output_row(batch_dict)
                     t4 = time.time()
                     print("\n------------------ pred batch data ", t4 - t3)
+                    if df_return_rdd_of_numpy_dict:
+                        for p in pred:
+                            yield {output_name: o_p for output_name, o_p in zip(outputs, p)}
                     for r, p in zip(batch_row, pred):
                         row = Row(*([r[col] for col in r.__fields__] + p))
                         yield row
@@ -241,17 +264,20 @@ class OpenvinoEstimator(SparkEstimator):
             schema = data.schema
             result = data.rdd.mapPartitions(lambda iter: partition_inference(iter))
 
-            # Deal with types
-            result_struct = []
-            for key, shape in self.output_dict.items():
-                struct_type = FloatType()
-                for _ in range(len(shape)):
-                    struct_type = ArrayType(struct_type)
-                result_struct.append(StructField(key, struct_type))
+            if df_return_rdd_of_numpy_dict:
+                return result
+            else:
+                # Deal with types
+                result_struct = []
+                for key, shape in self.output_dict.items():
+                    struct_type = FloatType()
+                    for _ in range(len(shape)):
+                        struct_type = ArrayType(struct_type)
+                    result_struct.append(StructField(key, struct_type))
 
-            schema = StructType(schema.fields + result_struct)
-            result_df = result.toDF(schema)
-            return result_df
+                schema = StructType(schema.fields + result_struct)
+                result_df = result.toDF(schema)
+                return result_df
         elif isinstance(data, SparkXShards):
             transformed_data = data.transform_shard(predict_transform, batch_size)
             result_rdd = transformed_data.rdd.mapPartitions(lambda iter: partition_inference(iter))
