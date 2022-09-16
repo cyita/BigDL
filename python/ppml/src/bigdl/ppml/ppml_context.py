@@ -20,6 +20,7 @@ from enum import Enum
 
 from pyspark.sql import SparkSession
 
+
 def check(ppml_args, arg_name):
     try:
         value = ppml_args[arg_name]
@@ -29,10 +30,13 @@ def check(ppml_args, arg_name):
 
 
 class PPMLContext(JavaValue):
-    def __init__(self, app_name, ppml_args):
+    def __init__(self, app_name, ppml_args=None, spark_conf=None):
         self.bigdl_type = "float"
         conf = {"spark.app.name": app_name,
                 "spark.hadoop.io.compression.codecs": "com.intel.analytics.bigdl.ppml.crypto.CryptoCodec"}
+        if spark_conf:
+            for (k, v) in spark_conf.getAll():
+                conf[k] = v
         if ppml_args:
             kms_type = ppml_args.get("kms_type", "SimpleKeyManagementService")
             conf["spark.bigdl.kms.type"] = kms_type
@@ -46,6 +50,11 @@ class PPMLContext(JavaValue):
                 conf["spark.bigdl.kms.ehs.port"] = check(ppml_args, "kms_server_port")
                 conf["spark.bigdl.kms.ehs.id"] = check(ppml_args, "ehsm_app_id")
                 conf["spark.bigdl.kms.ehs.key"] = check(ppml_args, "ehsm_app_key")
+                conf["spark.bigdl.kms.key.primary"] = check(ppml_args, "primary_key_path")
+                conf["spark.bigdl.kms.key.data"] = check(ppml_args, "data_key_path")
+            elif kms_type == "AzureKeyManagementService":
+                conf["spark.bigdl.kms.azure.vault"] = check(ppml_args, "azure_vault")
+                conf["spark.bigdl.kms.azure.clientId"] = ppml_args.get("azure_client_id", "")
                 conf["spark.bigdl.kms.key.primary"] = check(ppml_args, "primary_key_path")
                 conf["spark.bigdl.kms.key.data"] = check(ppml_args, "data_key_path")
             else:

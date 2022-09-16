@@ -38,6 +38,8 @@ class BasePytorchForecaster(Forecaster):
     def __init__(self, **kwargs):
         self.internal = None
         if self.distributed:
+            # don't support use_hpo when distributed
+            self.use_hpo = False
             from bigdl.orca.learn.pytorch.estimator import Estimator
             from bigdl.orca.learn.metrics import MSE, MAE
             ORCA_METRICS = {"mse": MSE, "mae": MAE}
@@ -74,8 +76,6 @@ class BasePytorchForecaster(Forecaster):
                                          "Enable HPO or remove search spaces in arguments to use.")
 
             if not has_space:
-                if self.use_hpo:
-                    warnings.warn("HPO is enabled but no spaces is specified, so disable HPO.")
                 self.use_hpo = False
                 model = self.model_creator({**self.model_config, **self.data_config})
                 loss = self.loss_creator(self.loss_config)
@@ -85,6 +85,7 @@ class BasePytorchForecaster(Forecaster):
             self.onnxruntime_fp32 = None  # onnxruntime session for fp32 precision
             self.openvino_fp32 = None  # placeholader openvino session for fp32 precision
             self.onnxruntime_int8 = None  # onnxruntime session for int8 precision
+            self.openvino_int8 = None  # placeholader openvino session for int8 precision
             self.pytorch_int8 = None  # pytorch model for int8 precision
 
     def _build_automodel(self, data, validation_data=None, batch_size=32, epochs=1):
@@ -184,7 +185,7 @@ class BasePytorchForecaster(Forecaster):
 
         # shall we use the same trainier
         self.tune_trainer = Trainer(logger=False, max_epochs=epochs,
-                                    checkpoint_callback=self.checkpoint_callback,
+                                    enable_checkpointing=self.checkpoint_callback,
                                     num_processes=self.num_processes, use_ipex=self.use_ipex,
                                     use_hpo=True)
 
@@ -209,7 +210,7 @@ class BasePytorchForecaster(Forecaster):
     def search_summary(self):
         # add tuning check
         invalidOperationError(self.use_hpo, "No search summary when HPO is disabled.")
-        return self.trainer.search_summary()
+        return self.tune_trainer.search_summary()
 
     def fit(self, data, validation_data=None, epochs=1, batch_size=32, validation_mode='output',
             earlystop_patience=1, use_trial_id=None):
@@ -340,14 +341,13 @@ class BasePytorchForecaster(Forecaster):
             # numpy data shape checking
             if isinstance(data, tuple):
                 check_data(data[0], data[1], self.data_config)
-            else:
-                warnings.warn("Data shape checking is not supported by dataloader input.")
 
             # data transformation
             if isinstance(data, tuple):
                 data = np_to_dataloader(data, batch_size, self.num_processes)
             from pytorch_lightning.loggers import CSVLogger
             logger = False if validation_data is None else CSVLogger(".",
+                                                                     flush_logs_every_n_steps=10,
                                                                      name="forecaster_tmp_log")
             from pytorch_lightning.callbacks import EarlyStopping
             early_stopping = EarlyStopping('val/loss', patience=earlystop_patience)
@@ -362,9 +362,9 @@ class BasePytorchForecaster(Forecaster):
                 callbacks = None
             # Trainer init
             self.trainer = Trainer(logger=logger, max_epochs=epochs, callbacks=callbacks,
-                                   checkpoint_callback=self.checkpoint_callback,
+                                   enable_checkpointing=self.checkpoint_callback,
                                    num_processes=self.num_processes, use_ipex=self.use_ipex,
-                                   flush_logs_every_n_steps=10, log_every_n_steps=10,
+                                   log_every_n_steps=10,
                                    distributed_backend=self.local_distributed_backend)
 
             # This error is only triggered when the python interpreter starts additional processes.
@@ -555,7 +555,7 @@ class BasePytorchForecaster(Forecaster):
                                               input_data=data,
                                               batch_size=batch_size)
 
-    def predict_with_openvino(self, data, batch_size=32):
+    def predict_with_openvino(self, data, batch_size=32, quantize=False):
         """
         Predict using a trained forecaster with openvino. The method can only be
         used when forecaster is a non-distributed version.
@@ -572,6 +572,7 @@ class BasePytorchForecaster(Forecaster):
         :param batch_size: predict batch size. The value will not affect predict
                result but will affect resources cost(e.g. memory and time). Defaults
                to 32. None for all-data-single-time inference.
+        :param quantize: if use the quantized openvino model to predict.
 
         :return: A numpy array with shape (num_samples, horizon, target_dim).
         """
@@ -586,24 +587,29 @@ class BasePytorchForecaster(Forecaster):
         if not self.fitted:
             invalidInputError(False,
                               "You must call fit or restore first before calling predict!")
-        if self.openvino_fp32 is None:
-            self.build_openvino()
-        return _pytorch_fashion_inference(model=self.openvino_fp32,
-                                          input_data=data,
-                                          batch_size=batch_size)
+        if quantize:
+            return _pytorch_fashion_inference(model=self.openvino_int8,
+                                              input_data=data,
+                                              batch_size=batch_size)
+        else:
+            if self.openvino_fp32 is None:
+                self.build_openvino()
+            return _pytorch_fashion_inference(model=self.openvino_fp32,
+                                              input_data=data,
+                                              batch_size=batch_size)
 
     def evaluate(self, data, batch_size=32, multioutput="raw_values", quantize=False):
         """
         Evaluate using a trained forecaster.
 
-        Please note that evaluate result is calculated by scaled y and yhat. If you scaled
-        your data (e.g. use .scale() on the TSDataset) please follow the following code
-        snap to evaluate your result if you need to evaluate on unscaled data.
-
-        if you want to evaluate on a single node(which is common practice), please call
+        If you want to evaluate on a single node(which is common practice), please call
         .to_local().evaluate(data, ...)
 
-        >>> from bigdl.orca.automl.metrics import Evaluator
+        Please note that evaluate result is calculated by scaled y and yhat. If you scaled
+        your data (e.g. use .scale() on the TSDataset), please follow the following code
+        snap to evaluate your result if you need to evaluate on unscaled data.
+
+        >>> from bigdl.chronos.metric.forecast_metrics import Evaluator
         >>> y_hat = forecaster.predict(x)
         >>> y_hat_unscaled = tsdata.unscale_numpy(y_hat) # or other customized unscale methods
         >>> y_unscaled = tsdata.unscale_numpy(y) # or other customized unscale methods
@@ -700,8 +706,8 @@ class BasePytorchForecaster(Forecaster):
         your data (e.g. use .scale() on the TSDataset) please follow the following code
         snap to evaluate your result if you need to evaluate on unscaled data.
 
-        >>> from bigdl.orca.automl.metrics import Evaluator
-        >>> y_hat = forecaster.predict(x)
+        >>> from bigdl.chronos.metric.forecast_metrics import Evaluator
+        >>> y_hat = forecaster.predict_with_onnx(x)
         >>> y_hat_unscaled = tsdata.unscale_numpy(y_hat) # or other customized unscale methods
         >>> y_unscaled = tsdata.unscale_numpy(y) # or other customized unscale methods
         >>> Evaluator.evaluate(metric=..., y_unscaled, y_hat_unscaled, multioutput=...)
@@ -819,10 +825,16 @@ class BasePytorchForecaster(Forecaster):
         else:
             from bigdl.nano.pytorch.lightning import LightningModule
             from bigdl.chronos.pytorch import TSTrainer as Trainer
-
-            model = self.model_creator({**self.model_config, **self.data_config})
-            loss = self.loss_creator(self.loss_config)
-            optimizer = self.optimizer_creator(model, self.optim_config)
+            if self.use_hpo:
+                ckpt = torch.load(checkpoint_file)
+                hparams = ckpt["hyper_parameters"]
+                model = self.model_creator(hparams)
+                loss = self.loss_creator(hparams)
+                optimizer = self.optimizer_creator(model, hparams)
+            else:
+                model = self.model_creator({**self.model_config, **self.data_config})
+                loss = self.loss_creator(self.loss_config)
+                optimizer = self.optimizer_creator(model, self.optim_config)
             self.internal = LightningModule.load_from_checkpoint(checkpoint_file,
                                                                  model=model,
                                                                  loss=loss,
@@ -836,7 +848,7 @@ class BasePytorchForecaster(Forecaster):
             # This trainer is only for quantization, once the user call `fit`, it will be
             # replaced according to the new training config
             self.trainer = Trainer(logger=False, max_epochs=1,
-                                   checkpoint_callback=self.checkpoint_callback,
+                                   enable_checkpointing=self.checkpoint_callback,
                                    num_processes=self.num_processes, use_ipex=self.use_ipex)
 
     def to_local(self):
@@ -868,7 +880,7 @@ class BasePytorchForecaster(Forecaster):
         # This trainer is only for saving, once the user call `fit`, it will be
         # replaced according to the new training config
         self.trainer = Trainer(logger=False, max_epochs=1,
-                               checkpoint_callback=self.checkpoint_callback,
+                               enable_checkpointing=self.checkpoint_callback,
                                num_processes=self.num_processes, use_ipex=self.use_ipex)
 
         self.distributed = False
@@ -876,6 +888,7 @@ class BasePytorchForecaster(Forecaster):
         self.onnxruntime_fp32 = None  # onnxruntime session for fp32 precision
         self.openvino_fp32 = None  # openvino session for fp32 precision
         self.onnxruntime_int8 = None  # onnxruntime session for int8 precision
+        self.openvino_int8 = None  # openvino session for int8 precision
         self.pytorch_int8 = None  # pytorch model for int8 precision
         return self
 
@@ -1002,10 +1015,12 @@ class BasePytorchForecaster(Forecaster):
                quantization. You may choose from "mse", "mae", "rmse", "r2", "mape", "smape".
         :param conf: A path to conf yaml file for quantization. Default to None,
                using default config.
-        :param framework: string or list, [{'pytorch'|'pytorch_fx'|'pytorch_ipex'},
-               {'onnxrt_integerops'|'onnxrt_qlinearops'}]. Default: 'pytorch_fx'.
-               Consistent with Intel Neural Compressor.
+        :param framework: string or list. [{'pytorch_fx'|'pytorch_ipex'},
+               {'onnxrt_integerops'|'onnxrt_qlinearops'}, {'openvino'}]
+               Default: 'pytorch_fx'. Consistent with Intel Neural Compressor.
         :param approach: str, 'static' or 'dynamic'. Default to 'static'.
+               OpenVINO supports static mode only, if set to 'dynamic',
+               it will be replaced with 'static'.
         :param tuning_strategy: str, 'bayesian', 'basic', 'mse' or 'sigopt'. Default to 'bayesian'.
         :param relative_drop: Float, tolerable ralative accuracy drop. Default to None,
                e.g. set to 0.1 means that we accept a 10% increase in the metrics error.
@@ -1062,9 +1077,15 @@ class BasePytorchForecaster(Forecaster):
         framework = [framework] if isinstance(framework, str) else framework
         temp_quantized_model = None
         for framework_item in framework:
-            accelerator, method = framework_item.split('_')
+            if '_' in framework_item:
+                accelerator, method = framework_item.split('_')
+            else:
+                accelerator = framework_item
             if accelerator == 'pytorch':
                 accelerator = None
+            elif accelerator == 'openvino':
+                method = None
+                approach = "static"
             else:
                 accelerator = 'onnxruntime'
                 method = method[:-3]
@@ -1083,6 +1104,8 @@ class BasePytorchForecaster(Forecaster):
                                             onnxruntime_session_options=sess_options)
             if accelerator == 'onnxruntime':
                 self.onnxruntime_int8 = q_model
+            if accelerator == 'openvino':
+                self.openvino_int8 = q_model
             if accelerator is None:
                 self.pytorch_int8 = q_model
 
@@ -1091,7 +1114,7 @@ class BasePytorchForecaster(Forecaster):
         """
         Build a Forecaster Model.
 
-        :param tsdataset: A bigdl.chronos.data.tsdataset.TSDataset instance.
+        :param tsdataset: Train tsdataset, a bigdl.chronos.data.tsdataset.TSDataset instance.
         :param past_seq_len: int or "auto", Specify the history time steps (i.e. lookback).
                Do not specify the 'past_seq_len' if your tsdataset has called
                the 'TSDataset.roll' method or 'TSDataset.to_torch_data_loader'.
@@ -1146,6 +1169,11 @@ class BasePytorchForecaster(Forecaster):
                           fixMsg="Do not specify past_seq_len and future seq_len "
                           "or call tsdataset.roll method again and specify time step")
 
+        if tsdataset.id_sensitive:
+            _id_list_len = len(tsdataset.id_col)
+            input_feature_num *= _id_list_len
+            output_feature_num *= _id_list_len
+
         return cls(past_seq_len=past_seq_len,
                    future_seq_len=future_seq_len,
                    input_feature_num=input_feature_num,
@@ -1156,6 +1184,13 @@ class BasePytorchForecaster(Forecaster):
 def _str2metric(metric):
     # map metric str to function
     if isinstance(metric, str):
-        from bigdl.chronos.metric.forecast_metrics import TORCHMETRICS_REGRESSION_MAP
-        metric = TORCHMETRICS_REGRESSION_MAP[metric]
+        metric_name = metric
+        from bigdl.chronos.metric.forecast_metrics import REGRESSION_MAP
+        metric_func = REGRESSION_MAP[metric_name]
+
+        def metric(y_label, y_predict):
+            y_label = y_label.numpy()
+            y_predict = y_predict.numpy()
+            return metric_func(y_label, y_predict)
+        metric.__name__ = metric_name
     return metric

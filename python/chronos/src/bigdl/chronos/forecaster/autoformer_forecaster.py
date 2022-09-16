@@ -165,8 +165,6 @@ class AutoformerForecaster(Forecaster):
                     **self.loss_config, **self.data_config})
 
         if not has_space:
-            if self.use_hpo:
-                warnings.warn("HPO is enabled but no spaces is specified, so disable HPO.")
             self.use_hpo = False
             self.internal = model_creator(self.model_config)
 
@@ -370,6 +368,9 @@ class AutoformerForecaster(Forecaster):
         """
         if self.distributed:
             invalidInputError(False, "distributed is not support in Autoformer")
+        invalidInputError(isinstance(data, tuple) or isinstance(data, DataLoader),
+                          "The input data to predict() support formats: numpy ndarray tuple"
+                          f" and pytorch dataloader, but found {type(data)}.")
         if isinstance(data, tuple):
             data = DataLoader(TensorDataset(torch.from_numpy(data[0]),
                                             torch.from_numpy(data[1]),
@@ -417,8 +418,11 @@ class AutoformerForecaster(Forecaster):
         self.trainer = Trainer(logger=False, max_epochs=1,
                                checkpoint_callback=self.checkpoint_callback, num_processes=1,
                                use_ipex=self.use_ipex, distributed_backend="spawn")
-        args = _transform_config_to_namedtuple(self.model_config)
-        self.internal = AutoFormer.load_from_checkpoint(checkpoint_file, configs=args)
+        checkpoint = torch.load(checkpoint_file)
+        config = checkpoint["hyper_parameters"]
+        args = _transform_config_to_namedtuple(config)
+        internal = AutoFormer.load_from_checkpoint(checkpoint_file, configs=args)
+        self.internal = internal
 
     def save(self, checkpoint_file):
         """
@@ -426,12 +430,21 @@ class AutoformerForecaster(Forecaster):
 
         :param checkpoint_file: The checkpoint file location you want to load the forecaster.
         """
+        if self.use_hpo:
+            self.trainer.model = self.trainer.model.model
         self.trainer.save_checkpoint(checkpoint_file)
 
 
 def _str2metric(metric):
     # map metric str to function
     if isinstance(metric, str):
-        from bigdl.chronos.metric.forecast_metrics import TORCHMETRICS_REGRESSION_MAP
-        metric = TORCHMETRICS_REGRESSION_MAP[metric]
+        metric_name = metric
+        from bigdl.chronos.metric.forecast_metrics import REGRESSION_MAP
+        metric_func = REGRESSION_MAP[metric_name]
+
+        def metric(y_label, y_predict):
+            y_label = y_label.numpy()
+            y_predict = y_predict.numpy()
+            return metric_func(y_label, y_predict)
+        metric.__name__ = metric_name
     return metric

@@ -32,18 +32,20 @@ Create Linux VM through Azure [CLI](https://docs.microsoft.com/en-us/azure/devel
 For size of the VM, please choose DC-V3 Series VM with more than 4 vCPU cores.
 
 #### 2.2.3 Pull BigDL PPML image and run on Linux client
-* Go to Azure Marketplace, search "BigDL PPML" and find `BigDL PPML` product. Click "Create" button which will lead you to `Subscribe` page.
+* Go to Azure Marketplace, search "BigDL PPML" and find `BigDL PPML: Secure Big Data AI on Intel SGX` product. Click "Create" button which will lead you to `Subscribe` page.
 On `Subscribe` page, input your subscription, your Azure container registry, your resource group, location. Then click `Subscribe` to subscribe BigDL PPML to your container registry.
+
+* Go to your Azure container regsitry, check `Repostirories`, and find `intel_corporation/bigdl-ppml-trusted-big-data-ml-python-graphene`
 * Login to the created VM. Then login to your Azure container registry, pull BigDL PPML image using such command:
 ```bash
-docker pull myContainerRegistry/bigdl-ppml-trusted-big-data-ml-python-graphene:2.1.0-SNAPSHOT
+docker pull myContainerRegistry/intel_corporation/bigdl-ppml-trusted-big-data-ml-python-graphene
 ```
 * Start container of this image
 ```bash
 #!/bin/bash
 
 export LOCAL_IP=YOUR_LOCAL_IP
-export DOCKER_IMAGE=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-graphene:2.1.0-SNAPSHOT
+export DOCKER_IMAGE=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-graphene
 
 sudo docker run -itd \
     --privileged \
@@ -110,8 +112,8 @@ az storage fs directory upload -f myFS --account-name myDataLakeAccount -s "path
 ### 2.4.2  Access data in Hadoop through ABFS(Azure Blob Filesystem) driver
 You can access Data Lake Storage in Hadoop filesytem by such URI:  ```abfs[s]://file_system@account_name.dfs.core.windows.net/<path>/<path>/<file_name>```
 #### Authentication
-The ABFS driver supports two forms of authentication so that the Hadoop application may securely access resources contained within a Data Lake Storage Gen2 capable account. 
- - Shared Key: This permits users access to ALL resources in the account. The key is encrypted and stored in Hadoop configuration.
+The ABFS driver supports two forms of authentication so that the Hadoop application may securely access resources contained within a Data Lake Storage Gen2 capable account.
+- Shared Key: This permits users access to ALL resources in the account. The key is encrypted and stored in Hadoop configuration.
 
 - Azure Active Directory OAuth Bearer Token: Azure AD bearer tokens are acquired and refreshed by the driver using either the identity of the end user or a configured Service Principal. Using this authentication model, all access is authorized on a per-call basis using the identity associated with the supplied token and evaluated against the assigned POSIX Access Control List (ACL).
 
@@ -175,7 +177,7 @@ Take note of principalId of the first line as System Managed Identity of your VM
 ##### b. Set access policy for AKS VM ScaleSet
 Example command:
 ```bash
-az keyvault set-policy --name myKeyVault --object-id <systemManagedIdentityOfVMSS> --secret-permissions get --key-permissions all --certificate-permissions all
+az keyvault set-policy --name myKeyVault --object-id <systemManagedIdentityOfVMSS> --secret-permissions get --key-permissions all
 ```
 #### 2.5.3.2 Set access for AKS
 ##### a. Enable Azure Key Vault Provider for Secrets Store CSI Driver support
@@ -206,14 +208,14 @@ az aks show -g myResourceGroup -n myAKSCluster --query addonProfiles.azureKeyvau
 ```
 The output would be like:
 ```bash
-f95519c1-3fe8-441b-a7b9-368d5e13b534
+xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 Take note of this output as your user-assigned managed identity of Azure KeyVault Secrets Provider
 * Grant your user-assigned managed identity permissions that enable it to read your key vault and view its contents
 Example command:
 ```bash
-az keyvault set-policy -n myKeyVault --key-permissions get --spn f95519c1-3fe8-441b-a7b9-368d5e13b534
-az keyvault set-policy -n myKeyVault --secret-permissions get --spn f95519c1-3fe8-441b-a7b9-368d5e13b534
+az keyvault set-policy -n myKeyVault --key-permissions get --spn xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+az keyvault set-policy -n myKeyVault --secret-permissions get --spn xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 #### c. Create a SecretProviderClass to access your Key Vault
 On your client docker container, edit `/ppml/trusted-big-data-ml/azure/secretProviderClass.yaml` file, modify `<client-id>` to your user-assigned managed identity of Azure KeyVault Secrets Provider, and modify `<key-vault-name>` and  `<tenant-id>` to your real key vault name and tenant id.
@@ -222,7 +224,6 @@ Then run:
 ```bash
 kubectl apply -f /ppml/trusted-big-data-ml/azure/secretProviderClass.yaml
 ```
-to create secretProviderClass in your AKS.
 
 ## 3. Run Spark PPML jobs
 Login to your client VM and enter your BigDL PPML container:
@@ -297,9 +298,9 @@ export TF_MKL_ALLOC_MAX_BYTES=10737418240 && \
     --conf spark.driver.defaultJavaOptions="-Dlog4j.configuration=/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/log4j2.xml" \
     --conf spark.executor.defaultJavaOptions="-Dlog4j.configuration=/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/log4j2.xml" \
     --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
-    --conf spark.kubernetes.container.image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-graphene:2.1.1-SNAPSHOT \
-    --conf spark.kubernetes.driver.podTemplateFile=/ppml/trusted-big-data-ml/spark-driver-template-kv.yaml \
-    --conf spark.kubernetes.executor.podTemplateFile=/ppml/trusted-big-data-ml/spark-executor-template-kv.yaml \
+    --conf spark.kubernetes.container.image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-graphene:2.1.0-SNAPSHOT \
+    --conf spark.kubernetes.driver.podTemplateFile=/ppml/trusted-big-data-ml/azure/spark-driver-template-az.yaml \
+    --conf spark.kubernetes.executor.podTemplateFile=/ppml/trusted-big-data-ml/azure/spark-executor-template-az.yaml \
     --conf spark.kubernetes.executor.deleteOnTermination=false \
     --conf spark.network.timeout=10000000 \
     --conf spark.executor.heartbeatInterval=10000000 \
@@ -344,7 +345,7 @@ export TF_MKL_ALLOC_MAX_BYTES=10737418240 && \
     --conf spark.bigdl.kms.key.data=$DATA_KEY_PATH \
     --class $SPARK_JOB_MAIN_CLASS \
     --verbose \
-    local://$SPARK_EXTRA_JAR_PATH \
+    $SPARK_EXTRA_JAR_PATH \
     $ARGS
 
 ```
@@ -377,7 +378,7 @@ Generate primary key and data key, then save to file system.
 
 The example code of generate primary key and data key is like below:
 ```
-java -cp '/ppml/trusted-big-data-ml/work/bigdl-2.1.0-SNAPSHOT/lib/bigdl-ppml-spark_3.1.2-2.1.0-SNAPSHOT-jar-with-dependencies.jar:/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/:/ppml/trusted-big-data-ml/work/spark-3.1.2/jars/* \
+java -cp '/ppml/trusted-big-data-ml/work/bigdl-2.1.0-SNAPSHOT/jars/*:/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/:/ppml/trusted-big-data-ml/work/spark-3.1.2/jars/* \
    -Xmx10g \
    com.intel.analytics.bigdl.ppml.examples.GenerateKeys \
    --kmsType AzureKeyManagementService \
@@ -391,7 +392,7 @@ Encrypt data with specified BigDL `AzureKeyManagementService`
 
 The example code of encrypt data is like below:
 ```
-java -cp '/ppml/trusted-big-data-ml/work/bigdl-2.1.0-SNAPSHOT/lib/bigdl-ppml-spark_3.1.2-2.1.0-SNAPSHOT-jar-with-dependencies.jar:/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/:/ppml/trusted-big-data-ml/work/spark-3.1.2/jars/* \
+java -cp '/ppml/trusted-big-data-ml/work/bigdl-2.1.0-SNAPSHOT/jars/*:/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/:/ppml/trusted-big-data-ml/work/spark-3.1.2/jars/* \
    -Xmx10g \
    com.intel.analytics.bigdl.ppml.examples.tpch.EncryptFiles \
    --kmsType AzureKeyManagementService \
@@ -431,7 +432,7 @@ OUTPUT_DIR=xxx/output
 
 export TF_MKL_ALLOC_MAX_BYTES=10737418240 && \
   /opt/jdk8/bin/java \
-    -cp '/ppml/trusted-big-data-ml/work/bigdl-2.1.0-SNAPSHOT/lib/bigdl-ppml-spark_3.1.2-2.1.0-SNAPSHOT-jar-with-dependencies.jar:/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/:/ppml/trusted-big-data-ml/work/spark-3.1.2/jars/*' \
+    -cp '/ppml/trusted-big-data-ml/work/bigdl-2.1.0-SNAPSHOT/jars/*:/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/:/ppml/trusted-big-data-ml/work/spark-3.1.2/jars/*' \
     -Xmx10g \
     -Dbigdl.mklNumThreads=1 \
     org.apache.spark.deploy.SparkSubmit \
@@ -447,9 +448,9 @@ export TF_MKL_ALLOC_MAX_BYTES=10737418240 && \
     --conf spark.driver.defaultJavaOptions="-Dlog4j.configuration=/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/log4j2.xml" \
     --conf spark.executor.defaultJavaOptions="-Dlog4j.configuration=/ppml/trusted-big-data-ml/work/spark-3.1.2/conf/log4j2.xml" \
     --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
-    --conf spark.kubernetes.container.image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-graphene:2.1.1-SNAPSHOT \
-    --conf spark.kubernetes.driver.podTemplateFile=/ppml/trusted-big-data-ml/spark-driver-template-kv.yaml \
-    --conf spark.kubernetes.executor.podTemplateFile=/ppml/trusted-big-data-ml/spark-executor-template-kv.yaml \
+    --conf spark.kubernetes.container.image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-graphene:2.1.0-SNAPSHOT \
+    --conf spark.kubernetes.driver.podTemplateFile=/ppml/trusted-big-data-ml/azure/spark-driver-template-az.yaml \
+    --conf spark.kubernetes.executor.podTemplateFile=/ppml/trusted-big-data-ml/azure/spark-executor-template-az.yaml \
     --conf spark.kubernetes.executor.deleteOnTermination=false \
     --conf spark.network.timeout=10000000 \
     --conf spark.executor.heartbeatInterval=10000000 \
@@ -494,7 +495,7 @@ export TF_MKL_ALLOC_MAX_BYTES=10737418240 && \
     --conf spark.bigdl.kms.key.data=$DATA_KEY_PATH \
     --class $SPARK_JOB_MAIN_CLASS \
     --verbose \
-    /ppml/trusted-big-data-ml/work/bigdl-2.1.0-SNAPSHOT/lib/bigdl-ppml-spark_3.1.2-2.1.0-SNAPSHOT-jar-with-dependencies.jar \
+    /ppml/trusted-big-data-ml/work/bigdl-2.1.0-SNAPSHOT/jars/bigdl-ppml-spark_3.1.2-2.1.0-SNAPSHOT.jar \
     $INPUT_DIR $OUTPUT_DIR aes_cbc_pkcs5padding plain_text [QUERY]
 ```
 

@@ -34,18 +34,23 @@ def get_ts_df():
     return train_df
 
 
-def create_data(loader=False):
+def create_data(loader=False, extra_feature=False):
     df = get_ts_df()
-    target = ["value", "extra feature"]
+    if extra_feature:
+        target = ["value"]
+        extra = ["extra feature"]
+    else:
+        target = ["value", "extra feature"]
+        extra = []
     tsdata_train, tsdata_val, tsdata_test =\
-        TSDataset.from_pandas(df, dt_col="datetime", target_col=target,
+        TSDataset.from_pandas(df, dt_col="datetime", target_col=target, extra_feature_col=extra,
                               with_split=True, test_ratio=0.1, val_ratio=0.1)
     if loader:
-        train_loader = tsdata_train.to_torch_data_loader(roll=True, lookback=24, horizon=5,
+        train_loader = tsdata_train.to_torch_data_loader(lookback=24, horizon=5,
                                                         time_enc=True, label_len=12)
-        val_loader = tsdata_val.to_torch_data_loader(roll=True, lookback=24, horizon=5,
+        val_loader = tsdata_val.to_torch_data_loader(lookback=24, horizon=5,
                                                     time_enc=True, label_len=12, shuffle=False)
-        test_loader = tsdata_test.to_torch_data_loader(roll=True, lookback=24, horizon=5,
+        test_loader = tsdata_test.to_torch_data_loader(lookback=24, horizon=5,
                                                     time_enc=True, label_len=12, shuffle=False,
                                                     is_predict=True)
         return train_loader, val_loader, test_loader
@@ -200,3 +205,59 @@ class TestChronosModelAutoformerForecaster(TestCase):
             forecaster.load(ckpt_name)
             evaluate2 = forecaster.evaluate(val_loader)
         assert evaluate[0]['val_loss'] == evaluate2[0]['val_loss']
+
+    def test_autoformer_forecaster_tune_save_load(self):
+            import bigdl.nano.automl.hpo.space as space
+            train_data, val_data, _ = create_data(loader=False)
+            forecaster = AutoformerForecaster(past_seq_len=24,
+                                            future_seq_len=5,
+                                            input_feature_num=2,
+                                            output_feature_num=2,
+                                            label_len=12,
+                                            d_model=space.Categorical(128, 10),
+                                            freq='s',
+                                            loss="mse",
+                                            metrics=['mae', 'mse', 'mape'],
+                                            seed=1,
+                                            lr=0.01)
+            forecaster.tune(train_data, validation_data=val_data, n_trials=2)
+            forecaster.fit(train_data, epochs=3, batch_size=32)
+            evaluate1 = forecaster.evaluate(val_data)
+            with tempfile.TemporaryDirectory() as tmp_dir_name:
+                ckpt_name = os.path.join(tmp_dir_name, "tune.ckpt")
+                forecaster.save(ckpt_name)
+                forecaster.load(ckpt_name)
+                evaluate2 = forecaster.evaluate(val_data)
+            assert evaluate1[0]['val/loss'] == evaluate2[0]['val_loss']
+
+    def test_autoformer_forecaster_even_kernel(self):
+        train_loader, val_loader, test_loader = create_data(loader=True)
+        evaluate_list = []
+        forecaster = AutoformerForecaster(past_seq_len=24,
+                                            future_seq_len=5,
+                                            input_feature_num=2,
+                                            output_feature_num=2,
+                                            label_len=12,
+                                            freq='s',
+                                            seed=0,
+                                            moving_avg=20) # even
+        forecaster.fit(train_loader, epochs=3, batch_size=32)
+        evaluate = forecaster.evaluate(val_loader)
+        pred = forecaster.predict(test_loader)
+        evaluate_list.append(evaluate)
+
+    def test_autoformer_forecaster_diff_input_output_dim(self):
+        train_loader, val_loader, test_loader = create_data(loader=True, extra_feature=True)
+        evaluate_list = []
+        forecaster = AutoformerForecaster(past_seq_len=24,
+                                          future_seq_len=5,
+                                          input_feature_num=2,
+                                          output_feature_num=1,
+                                          label_len=12,
+                                          freq='s',
+                                          seed=0,
+                                          moving_avg=20) # even
+        forecaster.fit(train_loader, epochs=3, batch_size=32)
+        evaluate = forecaster.evaluate(val_loader)
+        pred = forecaster.predict(test_loader)
+        evaluate_list.append(evaluate)

@@ -15,9 +15,12 @@
 #
 import os
 import numpy as np
+import pandas as pd
 
-from bigdl.dllib.utils.file_utils import get_file_list
+
+from bigdl.dllib.utils.file_utils import get_file_list, callZooFunc
 from bigdl.dllib.utils.utils import convert_row_to_numpy
+from bigdl.dllib.utils.common import *
 from bigdl.dllib.utils.log4Error import *
 
 
@@ -75,6 +78,7 @@ def check_type_and_convert(data, allow_tuple=True, allow_list=True):
     :param allow_list: boolean, if the model accepts a list as input. Default: True
     :return:
     """
+
     def check_and_convert(convert_data):
         if isinstance(convert_data, np.ndarray):
             return [convert_data]
@@ -108,6 +112,7 @@ def get_spec(allow_tuple=True, allow_list=True):
     :param allow_list: boolean, if the model accepts a list as input. Default: True
     :return:
     """
+
     def _get_spec(data):
         data = check_type_and_convert(data, allow_tuple, allow_list)
         feature_spec = [(feat.dtype, feat.shape[1:])
@@ -118,6 +123,7 @@ def get_spec(allow_tuple=True, allow_list=True):
         else:
             label_spec = None
         return feature_spec, label_spec
+
     return _get_spec
 
 
@@ -128,6 +134,7 @@ def flatten_xy(allow_tuple=True, allow_list=True):
     :param allow_list: boolean, if the model accepts a list as input. Default: True
     :return:
     """
+
     def _flatten_xy(data):
         data = check_type_and_convert(data, allow_tuple, allow_list)
         features = data["x"]
@@ -143,6 +150,7 @@ def flatten_xy(allow_tuple=True, allow_list=True):
                 yield (fs, ls)
             else:
                 yield (fs,)
+
     return _flatten_xy
 
 
@@ -373,7 +381,6 @@ def spark_df_to_rdd_pd(df, squeeze=False, index_col=None,
                        dtype=None, index_map=None):
     from bigdl.orca.data import SparkXShards
     from bigdl.orca import OrcaContext
-    columns = df.columns
 
     import pyspark.sql.functions as F
     import pyspark.sql.types as T
@@ -383,9 +390,18 @@ def spark_df_to_rdd_pd(df, squeeze=False, index_col=None,
             df = df.withColumn(colName, to_array(colName))
 
     shard_size = OrcaContext._shard_size
-    pd_rdd = df.rdd.mapPartitions(to_pandas(df.columns, squeeze, index_col, dtype, index_map,
-                                            batch_size=shard_size))
-    return pd_rdd
+
+    try:
+        pd_rdd = to_pandas(df, squeeze, index_col, dtype, index_map,
+                           batch_size=shard_size)
+        return pd_rdd
+    except Exception as e:
+        print(f"create shards from Spark DataFrame attempted Arrow optimization failed as:"
+              f" {str(e)}. Will try without Arrow optimization")
+        pd_rdd = df.rdd.mapPartitions(to_pandas_without_arrow(df.columns, squeeze, index_col,
+                                                              dtype, index_map,
+                                                              batch_size=shard_size))
+        return pd_rdd
 
 
 def spark_df_to_pd_sparkxshards(df, squeeze=False, index_col=None,
@@ -396,33 +412,33 @@ def spark_df_to_pd_sparkxshards(df, squeeze=False, index_col=None,
     return spark_xshards
 
 
-def to_pandas(columns, squeeze=False, index_col=None, dtype=None, index_map=None,
-              batch_size=None):
+def set_pandas_df_type_index(pd_df, squeeze=False, index_col=None, dtype=None, index_map=None):
+    if dtype is not None:
+        if isinstance(dtype, dict):
+            for col, type in dtype.items():
+                if isinstance(col, str):
+                    if col not in pd_df.columns:
+                        invalidInputError(False,
+                                          "column to be set type is not"
+                                          " in current dataframe")
+                    pd_df[col] = pd_df[col].astype(type)
+                elif isinstance(col, int):
+                    if index_map[col] not in pd_df.columns:
+                        invalidInputError(False,
+                                          "column index to be set type is not"
+                                          " in current dataframe")
+                    pd_df[index_map[col]] = pd_df[index_map[col]].astype(type)
+        else:
+            pd_df = pd_df.astype(dtype)
+    if squeeze and len(pd_df.columns) == 1:
+        pd_df = pd_df.iloc[:, 0]
+    if index_col:
+        pd_df = pd_df.set_index(index_col)
+    return pd_df
 
-    def postprocess(pd_df):
-        if dtype is not None:
-            if isinstance(dtype, dict):
-                for col, type in dtype.items():
-                    if isinstance(col, str):
-                        if col not in pd_df.columns:
-                            invalidInputError(False,
-                                              "column to be set type is not"
-                                              " in current dataframe")
-                        pd_df[col] = pd_df[col].astype(type)
-                    elif isinstance(col, int):
-                        if index_map[col] not in pd_df.columns:
-                            invalidInputError(False,
-                                              "column index to be set type is not"
-                                              " in current dataframe")
-                        pd_df[index_map[col]] = pd_df[index_map[col]].astype(type)
-            else:
-                pd_df = pd_df.astype(dtype)
-        if squeeze and len(pd_df.columns) == 1:
-            pd_df = pd_df.iloc[:, 0]
-        if index_col:
-            pd_df = pd_df.set_index(index_col)
-        return pd_df
 
+def to_pandas_without_arrow(columns, squeeze=False, index_col=None, dtype=None, index_map=None,
+                            batch_size=None):
     def f(iter):
         import pandas as pd
         counter = 0
@@ -432,15 +448,36 @@ def to_pandas(columns, squeeze=False, index_col=None, dtype=None, index_map=None
             data.append(row)
             if batch_size and counter % batch_size == 0:
                 pd_df = pd.DataFrame(data, columns=columns)
-                pd_df = postprocess(pd_df)
+                pd_df = set_pandas_df_type_index(pd_df, squeeze, index_col, dtype, index_map)
                 yield pd_df
                 data = []
         if data:
             pd_df = pd.DataFrame(data, columns=columns)
-            pd_df = postprocess(pd_df)
+            pd_df = set_pandas_df_type_index(pd_df, squeeze, index_col, dtype, index_map)
             yield pd_df
 
     return f
+
+
+def to_pandas(df, squeeze=False, index_col=None, dtype=None, index_map=None, batch_size=None):
+    def farrow(iter):
+        for fileName in iter:
+            from pyspark.sql.pandas.serializers import ArrowStreamSerializer
+            import pyarrow as pa
+            ser = ArrowStreamSerializer()
+            with open(fileName, "rb") as stream:
+                batches = ser.load_stream(stream)
+                table = pa.Table.from_batches(batches)
+                pd_df = table.to_pandas()
+                pd_df = set_pandas_df_type_index(pd_df, squeeze, index_col, dtype, index_map)
+                yield pd_df
+
+    sqlContext = get_spark_sql_context(get_spark_context())
+
+    batch_size = -1 if not batch_size else batch_size
+    rdd_file = callZooFunc("float", "sparkdfTopdf", df._jdf, sqlContext, batch_size)
+    pd_rdd = rdd_file.mapPartitions(farrow)
+    return pd_rdd
 
 
 def spark_xshards_to_ray_dataset(spark_xshards):
@@ -455,7 +492,6 @@ def spark_xshards_to_ray_dataset(spark_xshards):
 
 
 def generate_string_idx(df, columns, freq_limit, order_by_freq):
-    from bigdl.dllib.utils.file_utils import callZooFunc
     return callZooFunc("float", "generateStringIdx", df, columns, freq_limit, order_by_freq)
 
 
@@ -465,30 +501,3 @@ def check_col_exists(df, columns):
     if len(col_not_exist) > 0:
         invalidInputError(False,
                           str(col_not_exist) + " do not exist in this Table")
-
-
-def shards_pd_df_to_shards_dic(data, featureCols, labelCol):
-    """
-    This api is used to process SparkXShards of pandas dataframe to SparkXShards of
-    dictionary, x is feature, y is label
-    :param data: SparkXShards of pandas dataframe.
-    :param featureCols: a list of featurecols.
-    :param labelCol: single label col.
-    :return: SparkXShards of dictionary
-
-    eg:
-    shards: SparkXShards of pandas dataframe with 2 cols ['f1', 'lable'],
-    transform_shards = shards_pd_df_to_shards_dic(shards, featureCols=[''], labelCol='')
-
-    transform_shards will be SparkXShards of dictionary. x will be a stacked numpy array
-    (stack feature columns), y will be a numpy array
-    """
-    def to_shard_dict(df):
-        featureLists = [df[feature_col].to_numpy() for feature_col in featureCols]
-        result = {
-            "x": np.stack(featureLists, axis=1),
-            "y": df[labelCol].to_numpy().reshape((-1, 1))}
-        return result
-
-    data = data.transform_shard(to_shard_dict)
-    return data
