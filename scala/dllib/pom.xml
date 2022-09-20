@@ -190,7 +190,7 @@
         </dependency>
         <dependency>
             <groupId>com.intel.analytics.bigdl.spark-version</groupId>
-            <artifactId>${spark-version.project}</artifactId>
+            <artifactId>3.0</artifactId>
             <version>${project.version}</version>
     	</dependency>
 	<dependency>
