@@ -18,19 +18,25 @@ package com.intel.analytics.bigdl.orca.python
 
 import com.intel.analytics.bigdl.orca.inference.InferenceModel
 import org.apache.spark.api.java.{JavaRDD, JavaSparkContext}
-import java.util.{List => JList}
 
+import java.util.{Base64, List => JList}
 import com.intel.analytics.bigdl.dllib.tensor.TensorNumericMath.TensorNumeric
 import com.intel.analytics.bigdl.dllib.common.PythonZoo
+import org.apache.arrow.memory.RootAllocator
+import org.apache.arrow.vector.ipc.ArrowStreamReader
 
 import scala.reflect.ClassTag
 import scala.collection.JavaConverters._
 import org.apache.spark.TaskContext
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.{col, rand, row_number, spark_partition_id, udf, log => sqllog}
+
+import java.io.ByteArrayInputStream
+import scala.collection.mutable.ArrayBuffer
 
 object PythonOrca {
 
@@ -53,6 +59,79 @@ class PythonOrca[T: ClassTag](implicit ev: TensorNumeric[T]) extends PythonZoo[T
         activityToList(outputActivity)
       })
     })
+  }
+
+  def arrowTest(inputs: JavaRDD[String], outputNames: JList[String], outShapes: JList[JList[Int]])
+  : DataFrame = {
+    val spark = SparkSession.builder.config(inputs.sparkContext.getConf).getOrCreate()
+    val outputNamesScala = outputNames.asScala
+    val outputShapesScala = outShapes.asScala.map(_.asScala.toArray[Int]).toArray
+//    val outputShapesScala = Array(Array(2, 3), Array(2, 4))
+    val de_rdd = inputs.rdd.flatMap(hexStr => {
+      val allocator = new RootAllocator()
+      val in = new ByteArrayInputStream(hexStringToByteArray(hexStr))
+      val stream = new ArrowStreamReader(in, allocator)
+      val vsrhex = stream.getVectorSchemaRoot
+      val outputVectorReaders = outputNamesScala.map(name => {
+        vsrhex.getVector(name).getReader
+      })
+      stream.loadNextBatch()
+      val rowCount = vsrhex.getRowCount
+      val batchedListResults = (0 until rowCount).map(i => {
+        val row_vector = outputVectorReaders.zipWithIndex.map(readerIdxTuple => {
+          val reader = readerIdxTuple._1
+          val idx = readerIdxTuple._2
+          reader.setPosition(i)
+          val shape = outputShapesScala(idx).reverse.dropRight(1)
+          val dataArr = ArrayBuffer[Float]()
+          while (reader.next()) {
+            val floatReader = reader.reader()
+            if (floatReader.isSet) {
+              dataArr += floatReader.readFloat()
+            }
+          }
+          var groupedArr: Array[Any] = dataArr.toArray
+          for (s <- shape) {
+            groupedArr = groupedArr.grouped(s).toArray
+          }
+          groupedArr
+        })
+        Row.fromSeq(row_vector)
+      })
+      stream.close()
+      in.close()
+      allocator.close()
+      batchedListResults
+    })
+    val c = de_rdd.collect()
+    // TODO: merge schema
+//    var schema = StructType()
+    val resultStruct = (outputNamesScala zip outputShapesScala).map(nameShape => {
+      var structType: DataType = FloatType
+      for (_ <- nameShape._2.indices) {
+        structType = ArrayType(structType)
+      }
+      StructField(nameShape._1, structType, true)
+    }).toArray
+//    schema = StructType(schema.fields ++: resultStruct)
+    val schema = StructType(resultStruct)
+    val df = spark.createDataFrame(de_rdd, schema)
+//    df.show(truncate=false)
+
+    df
+  }
+
+  def hexStringToByteArray(s: String): Array[Byte] = {
+    val len = s.length
+    val data = new Array[Byte](len / 2)
+    var i = 0
+    while ( {
+      i < len
+    }) {
+      data(i / 2) = ((Character.digit(s.charAt(i), 16) << 4) + Character.digit(s.charAt(i + 1), 16)).toByte
+      i += 2
+    }
+    data
   }
 
   def generateStringIdx(df: DataFrame, columns: JList[String], frequencyLimit: String = null,

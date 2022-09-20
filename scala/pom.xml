@@ -193,11 +193,11 @@
         <module>common/spark-version</module>
         <module>dllib</module>
         <module>orca</module>
-        <module>friesian</module>
-        <module>grpc</module>
-        <module>serving</module>
-        <module>ppml</module>
-        <module>assembly</module>
+<!--        <module>friesian</module>-->
+<!--        <module>grpc</module>-->
+<!--        <module>serving</module>-->
+<!--        <module>ppml</module>-->
+<!--        <module>assembly</module>-->
     </modules>
 
     <distributionManagement>
