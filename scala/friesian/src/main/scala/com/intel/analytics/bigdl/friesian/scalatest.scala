@@ -50,16 +50,26 @@ object scalatest {
       .master("local[1]").appName("SparkByExamples.com")
       .getOrCreate()
 
-    val hexFile = "/home/yina/Documents/BigDL/python/orca/example/learn/openvino/hex"
-//    for (line <- Source.fromFile(hexFile).getLines()) {
-//      println(line)
-//    }
-    val line = Source.fromFile(hexFile).getLines().next()
-    val rdd = spark.sparkContext.parallelize(Array(line, line), numSlices = 2)
+    val sdf = spark.read.parquet("/home/yina/Documents/data/myissue/reshape.parquet")
     val orca = PythonOrca.ofFloat()
-    val shapes = Array(Array(2, 3), Array(2, 4))
-    val jShape = shapes.map(_.toList.asJava).toList.asJava
-    val result = orca.arrowTest(JavaRDD.fromRDD(rdd), Array("a", "b").toList.asJava, jShape)
+    val df = orca.sdfReshape(sdf,
+      List("tf.identity", "tf.identity_1", "tf.identity_2", "tf.identity_3").asJava,
+      List(List(1, 19248, 4), List(1, 19248, 32), List(1, 138, 138, 32), List(1, 19248, 81)).map(_.asJava).asJava)
+    val a = df.collect()
+    df.show()
+    Thread.sleep(60000)
+    a
+
+//    val hexFile = "/home/yina/Documents/BigDL/python/orca/example/learn/openvino/hex"
+////    for (line <- Source.fromFile(hexFile).getLines()) {
+////      println(line)
+////    }
+//    val line = Source.fromFile(hexFile).getLines().next()
+//    val rdd = spark.sparkContext.parallelize(Array(line, line), numSlices = 2)
+//    val orca = PythonOrca.ofFloat()
+//    val shapes = Array(Array(2, 3), Array(2, 4))
+//    val jShape = shapes.map(_.toList.asJava).toList.asJava
+//    val result = orca.arrowTest(JavaRDD.fromRDD(rdd), Array("a", "b").toList.asJava, jShape)
 
 
 

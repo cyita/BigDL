@@ -30,12 +30,14 @@ import scala.collection.JavaConverters._
 import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
+import org.apache.spark.sql.api.java.{UDF1, UDF2}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.{col, rand, row_number, spark_partition_id, udf, log => sqllog}
 
 import java.io.ByteArrayInputStream
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 object PythonOrca {
@@ -59,6 +61,85 @@ class PythonOrca[T: ClassTag](implicit ev: TensorNumeric[T]) extends PythonZoo[T
         activityToList(outputActivity)
       })
     })
+  }
+
+  def sdfReshape(df: DataFrame, columns: JList[String], shapes: JList[JList[Int]]): DataFrame = {
+    val spark = df.sparkSession
+    val columnScala = columns.asScala
+    val shapeScala = shapes.asScala.map(_.asScala.toArray[Int]).toArray
+    val reverseShapeArr = shapeScala.map(_.reverse.dropRight(1))
+
+    val col_idx = columnScala.map(col_n => {
+      val idx = df.columns.indexOf(col_n)
+      if (idx == -1) {
+        throw new IllegalArgumentException(s"The column name $col_n does not exist")
+      }
+      idx
+    })
+
+    val resultRDD = df.rdd.map(row => {
+//      var origin = row.toSeq.toVector
+//      for ((idx, shape) <- col_idx zip shapeScala) {
+//        val shapeReverse = shape.reverse.dropRight(1)
+//        var groupedArr: Array[Any] = row.getAs[mutable.WrappedArray[Float]](idx).toArray
+//        for (s <- shapeReverse) {
+//          groupedArr = groupedArr.grouped(s).toArray
+//        }
+//        origin = origin.updated(idx, groupedArr)
+//      }
+//      Row.fromSeq(origin)
+      val rowList = (col_idx zip reverseShapeArr).map(idxShape => {
+        var groupedArr: Array[Any] = row.getAs[mutable.WrappedArray[Float]](idxShape._1).toArray
+        for (s <- idxShape._2) {
+          groupedArr = groupedArr.grouped(s).toArray
+        }
+        groupedArr
+      })
+      Row.fromSeq(rowList)
+    })
+
+    val resultStruct = (columnScala zip shapeScala).map(nameShape => {
+      var structType: DataType = FloatType
+      for (_ <- nameShape._2.indices) {
+        structType = ArrayType(structType)
+      }
+      StructField(nameShape._1, structType, true)
+    }).toArray
+    val schema = StructType(resultStruct)
+    val resultDF = spark.createDataFrame(resultRDD, schema)
+    resultDF
+//    var resultDF = df
+//    (columns zip shapeScala).foreach(cs => {
+//      val colShape = cs._2
+//      var structType: DataType = FloatType
+//      for (_ <- colShape.indices) {
+//        structType = ArrayType(structType)
+//      }
+////      val reshapeUDF = udf(reshape, structType)
+//      val reshapeUDF = udf((data: mutable.WrappedArray[Float], shape: Array[Int]) => {
+//        val shapeReverse = shape.reverse.dropRight(1)
+//        var groupedArr: Array[Float] = data.toArray
+//        var iter: Iterator = null
+//        for (s <- shapeReverse) {
+////          groupedArr = groupedArr.grouped(s)
+//          iter = groupedArr.grouped(s)
+//        }
+//        groupedArr.asInstanceOf[Array[Array[Array[Float]]]]
+//      })
+//
+//      val size = udf((data: mutable.WrappedArray[Float]) => {
+//        data.length
+//      })
+////      val reshapeUDF = udf(new UDF2[mutable.WrappedArray[Float], Array[Int]] {
+////  override def call(t1: mutable.WrappedArray[Float]): Array[Int] = {
+////
+////  }
+////})
+//      resultDF = resultDF.withColumn(cs._1, reshapeUDF(col(s"`${cs._1}`"), lit(colShape)))
+////      resultDF = resultDF.withColumn(cs._1, reshapeUDF(col("`tf.identity`")))
+//      resultDF.show()
+//    })
+//    resultDF
   }
 
   def arrowTest(inputs: JavaRDD[String], outputNames: JList[String], outShapes: JList[JList[Int]])
@@ -103,7 +184,7 @@ class PythonOrca[T: ClassTag](implicit ev: TensorNumeric[T]) extends PythonZoo[T
       allocator.close()
       batchedListResults
     })
-    val c = de_rdd.collect()
+//    val c = de_rdd.collect()
     // TODO: merge schema
 //    var schema = StructType()
     val resultStruct = (outputNamesScala zip outputShapesScala).map(nameShape => {
