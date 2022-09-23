@@ -36,6 +36,10 @@ def callJava(rdd, names, shapes):
     return callBigDlFunc("float", "arrowTest", rdd, names, shapes)
 
 
+def callReshape(df, names, shapes):
+    return callBigDlFunc("float", "sdfReshape", df, names, shapes)
+
+
 class Estimator(object):
     @staticmethod
     def from_openvino(*, model_path):
@@ -59,6 +63,67 @@ class OpenvinoEstimator(SparkEstimator):
         Fit is not supported in OpenVINOEstimator
         """
         invalidInputError(False, "not implemented")
+
+    def predict_without_ov(self, data, batch_size=4):
+        import pyarrow as pa
+        import pandas as pd
+        input_cols = self.inputs
+        outputs = list(self.output_dict.keys())
+        dummy_output = [
+            np.arange(76992 * batch_size).reshape((batch_size, 19248, 4)).astype(np.float32),
+            np.arange(615936 * batch_size).reshape((batch_size, 19248, 32)).astype(np.float32),
+            np.arange(609408 * batch_size).reshape((batch_size, 138, 138, 32)).astype(np.float32),
+            np.arange(1559088 * batch_size).reshape((batch_size, 19248, 81)).astype(np.float32)
+        ]
+
+        def partition_inference(partition):
+            @profile
+            def to_arrow():
+                t1 = time.time()
+                pred = dummy_output
+                # ----------------------- la
+                # temp_r = []
+                # for i in range(batch_size):
+                #     single_r = []
+                #     for p in pred:
+                #         single_r.append([p[i].flatten()])
+                #     sink = pa.BufferOutputStream()
+                #     pred_arrow = pa.record_batch(single_r, names=outputs)
+                #     with pa.ipc.new_stream(sink, pred_arrow.schema) as writer:
+                #         writer.write_batch(pred_arrow)
+                #     pred_arrow = sink.getvalue().hex()
+                #     pred_arrow = pred_arrow.decode("utf-8")
+                #     temp_r.append(pred_arrow)
+                #     sink.close()
+                # pred = temp_r
+                # --------------- pandas
+                temp_r = []
+                for i in range(batch_size):
+                    single_r = []
+                    for p in pred:
+                        single_r.append(p[i].flatten())
+                    temp_r.append(single_r)
+                pred = pd.DataFrame(temp_r, columns=outputs)
+                t2 = time.time()
+                print("\n------------------------ arrow ", t2 - t1)
+                return pred
+
+            for batch_data in partition:
+                dummpy_pred = to_arrow()
+                # for p in dummpy_pred:
+                #     yield p
+                yield dummpy_pred
+                del dummpy_pred
+
+        schema = data.schema
+        result = data.rdd.mapPartitions(lambda iter: partition_inference(iter))
+        # c = result.collect()
+        shard = SparkXShards(result)
+        df = shard.to_spark_df()
+        df = callReshape(df, outputs, list(self.output_dict.values()))
+
+        # df = callJava(result, outputs, list(self.output_dict.values()))
+        return df
 
     def predict(self, data, feature_cols=None, batch_size=4, input_cols=None,
                 df_return_rdd_of_numpy_dict=False):
@@ -159,17 +224,37 @@ class OpenvinoEstimator(SparkEstimator):
                     pred = list(map(lambda output:
                                     infer_request.output_blobs[output].buffer[:elem_num],
                                     outputs))
-                    pred = [[output[i].flatten() for i in range(0, elem_num)] for output in pred]
-                    pred = pa.record_batch(pred, names=outputs)
-                    sink = pa.BufferOutputStream()
+                    # -------------------------------- not batch
 
-                    with pa.ipc.new_stream(sink, pred.schema) as writer:
-                        writer.write_batch(pred)
+                    temp_r = []
+                    for i in range(elem_num):
+                        single_r = []
+                        for p in pred:
+                            single_r.append([p[i].flatten()])
+                        sink = pa.BufferOutputStream()
+                        pred_arrow = pa.record_batch(single_r, names=outputs)
+                        with pa.ipc.new_stream(sink, pred_arrow.schema) as writer:
+                            writer.write_batch(pred_arrow)
+                        pred_arrow = sink.getvalue().hex()
+                        pred_arrow = pred_arrow.decode("utf-8")
+                        temp_r.append(pred_arrow)
+                        sink.close()
+                    pred = temp_r
 
-                    pred = sink.getvalue().hex()
-                    encoding = 'utf-8'
-                    pred = pred.decode(encoding)
-                    sink.close()
+                    # -------------------------------- batched record batch
+                    # pred = [[output[i].flatten() for i in range(0, elem_num)] for output in pred]
+                    # pred = pa.record_batch(pred, names=outputs)
+                    # sink = pa.BufferOutputStream()
+                    #
+                    # with pa.ipc.new_stream(sink, pred.schema) as writer:
+                    #     writer.write_batch(pred)
+                    #
+                    # pred = sink.getvalue().hex()
+                    # encoding = 'utf-8'
+                    # pred = pred.decode(encoding)
+                    # sink.close()
+
+                    # ------------------------------------ origin to list
                     # temp_r = []
                     # for i in range(elem_num):
                     #     single_r = []
@@ -220,7 +305,10 @@ class OpenvinoEstimator(SparkEstimator):
                         pred = generate_output_row(batch_dict)
                         t4 = time.time()
                         print("------------------ pred batch data ", t4 - t3)
-                        yield pred
+                        # yield pred
+                        #----
+                        for p in pred:
+                            yield p
                         # if df_return_rdd_of_numpy_dict:
                         #     for p in pred:
                         #         yield {output_name: o_p for output_name, o_p in zip(outputs, p)}
@@ -243,7 +331,9 @@ class OpenvinoEstimator(SparkEstimator):
                     # for r, p in zip(batch_row, pred):
                     #     row = Row(*([r[col] for col in r.__fields__] + p))
                     #     yield row
-                    yield pred
+                    # yield pred
+                    for p in pred:
+                        yield p
                     del pred
             del local_model
             del net
@@ -278,7 +368,12 @@ class OpenvinoEstimator(SparkEstimator):
             is_df = True
             schema = data.schema
             result = data.rdd.mapPartitions(lambda iter: partition_inference(iter))
-            c = result.collect()
+            # c = result.collect()
+
+            df = callJava(result, outputs, list(self.output_dict.values()))
+            return df
+            # data.show()
+            # dfc = df.collect()
 
             if df_return_rdd_of_numpy_dict:
                 return result
