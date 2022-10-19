@@ -22,7 +22,6 @@ import com.intel.analytics.bigdl.dllib.tensor.Tensor
 import com.intel.analytics.bigdl.dllib.utils.T
 import com.intel.analytics.bigdl.friesian.serving.recall.IndexService
 import org.apache.logging.log4j.{LogManager, Logger}
-import org.apache.spark.ml.linalg.DenseVector
 
 import scala.collection.JavaConverters._
 
@@ -47,7 +46,6 @@ object RecallUtils {
           throw new Exception(s"Feature column number should be 1, but got: ${d.length}")
         }
         d(0) match {
-          case f: DenseVector => denseVectorToFloatArr(f)
           case f: Array[Float] => f
           case _ => throw new Exception(s"Unsupported user vector type, only Activity, " +
             s"DenseVector and Float[] are supported, but got ${d.getClass.getName}")
@@ -61,9 +59,5 @@ object RecallUtils {
     val dTensor: Tensor[Float] = data.toTensor
     val result = dTensor.squeeze(1).toArray()
     result
-  }
-
-  def denseVectorToFloatArr(data: DenseVector): Array[Float] = {
-    data.toArray.map(_.toFloat)
   }
 }

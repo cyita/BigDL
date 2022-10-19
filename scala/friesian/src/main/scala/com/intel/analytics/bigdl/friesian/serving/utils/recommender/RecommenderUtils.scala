@@ -16,24 +16,19 @@
 
 package com.intel.analytics.bigdl.friesian.serving.utils.recommender
 
-import java.util
-import java.util.Base64
 import com.intel.analytics.bigdl.dllib.nn.abstractnn.Activity
 import com.intel.analytics.bigdl.dllib.tensor.Tensor
-import com.intel.analytics.bigdl.dllib.utils.{T, Table}
-import com.intel.analytics.bigdl.friesian.serving.utils.{EncodeUtils, Utils}
-import com.intel.analytics.bigdl.friesian.serving.grpc.generated.feature.FeatureProto.{Features, IDs}
+import com.intel.analytics.bigdl.dllib.utils.{Log4Error, T, Table}
+import com.intel.analytics.bigdl.friesian.serving.grpc.generated.feature.FeatureProto.Features
 import com.intel.analytics.bigdl.friesian.serving.grpc.generated.ranking.RankingGrpc.RankingBlockingStub
 import com.intel.analytics.bigdl.friesian.serving.grpc.generated.ranking.RankingProto.{Content, Prediction}
 import com.intel.analytics.bigdl.friesian.serving.utils.feature.FeatureUtils
+import com.intel.analytics.bigdl.friesian.serving.utils.{EncodeUtils, Utils}
 import io.grpc.StatusRuntimeException
 import org.apache.logging.log4j.{LogManager, Logger}
-import org.apache.spark.ml.linalg.DenseVector
-import org.apache.spark.sql.SparkSession
-
+import java.util.Base64
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-import com.intel.analytics.bigdl.dllib.utils.Log4Error
 
 object RecommenderUtils {
   val logger: Logger = LogManager.getLogger(getClass)
@@ -153,23 +148,5 @@ object RecommenderUtils {
     val sortedId = sorted.map(_._1)
     val sortedProb = sorted.map(_._2)
     (sortedId, sortedProb)
-  }
-
-  // For wnd validation
-  def loadResultParquet(resultPath: String):
-  (util.Map[Integer, Integer], util.Map[Integer, java.lang.Float]) = {
-    val spark = SparkSession.builder.getOrCreate
-    val df = spark.read.parquet(resultPath)
-    val userItemMap = collection.mutable.Map[Int, Int]()
-    val userPredMap = collection.mutable.Map[Int, Float]()
-    df.collect().foreach(row => {
-      val userId = row.getInt(0)
-      val itemId = row.getInt(1)
-      val pred = row.getAs[DenseVector](2).toArray(0).toFloat
-      userItemMap.update(userId, itemId)
-      userPredMap.update(userId, pred)
-    })
-    (userItemMap.asJava.asInstanceOf[util.Map[Integer, Integer]], userPredMap.asJava
-      .asInstanceOf[util.Map[Integer, java.lang.Float]])
   }
 }
