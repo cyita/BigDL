@@ -96,6 +96,7 @@ object FeatureNearlineUtils {
   def encodeRow(row: Row): Array[String] = {
     val id = row.get(0).toString
     val rowArr = row.toSeq.drop(1).toArray
+    // TODO: DenseVector to Array
     val encodedValue = Base64.getEncoder.encodeToString(objToBytes(rowArr))
     Array(id, encodedValue)
   }

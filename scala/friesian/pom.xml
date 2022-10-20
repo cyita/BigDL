@@ -193,12 +193,12 @@
             <version>2.2.0-SNAPSHOT</version>
             <scope>${nearline.scope}</scope>
         </dependency>
-        <dependency>
-            <groupId>org.apache.spark</groupId>
-            <artifactId>spark-sql_${scala.major.version}</artifactId>
-            <version>${spark.version}</version>
-            <scope>${spark-scope}</scope>
-        </dependency>
+<!--        <dependency>-->
+<!--            <groupId>org.apache.spark</groupId>-->
+<!--            <artifactId>spark-sql_${scala.major.version}</artifactId>-->
+<!--            <version>${spark.version}</version>-->
+<!--            <scope>${spark-scope}</scope>-->
+<!--        </dependency>-->
         <dependency>
             <groupId>io.lettuce</groupId>
             <artifactId>lettuce-core</artifactId>
@@ -608,6 +608,11 @@
             </properties>
             <dependencies>
                 <dependency>
+                    <groupId>org.json4s</groupId>
+                    <artifactId>json4s-jackson_${scala.major.version}</artifactId>
+                    <version>3.7.0-M5</version>
+                </dependency>
+                <dependency>
                     <groupId>org.scala-lang</groupId>
                     <artifactId>scala-compiler</artifactId>
                     <version>${scala.version}</version>
@@ -625,6 +630,46 @@
                     <version>${scala.version}</version>
                     <scope>compile</scope>
                 </dependency>
+                <dependency>
+                    <groupId>org.json4s</groupId>
+                    <artifactId>json4s-jackson_${scala.major.version}</artifactId>
+                    <version>3.7.0-M5</version>
+                    <scope>compile</scope>
+                </dependency>
+                <dependency>
+                    <groupId>jakarta.annotation</groupId>
+                    <artifactId>jakarta.annotation-api</artifactId>
+                    <version>1.3.5</version>
+                    <scope>compile</scope>
+                </dependency>
+                <dependency>
+                    <groupId>jakarta.validation</groupId>
+                    <artifactId>jakarta.validation-api</artifactId>
+                    <version>2.0.2</version>
+                    <scope>compile</scope>
+                </dependency>
+                <dependency>
+                    <groupId>jakarta.validation</groupId>
+                    <artifactId>jakarta.validation-api</artifactId>
+                    <version>2.0.2</version>
+                    <scope>compile</scope>
+                </dependency>
+<!--                <dependency>-->
+<!--                    <groupId>org.apache.spark</groupId>-->
+<!--                    <artifactId></artifactId>-->
+<!--                </dependency>-->
+                <dependency>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-mllib_${scala.major.version}</artifactId>
+                    <version>${spark.version}</version>
+                    <scope>compile</scope>
+                </dependency>
+<!--                <dependency>-->
+<!--                    <groupId>org.apache.spark</groupId>-->
+<!--                    <artifactId>spark-sql_${scala.major.version}</artifactId>-->
+<!--                    <version>${spark.version}</version>-->
+<!--                    <scope>compile</scope>-->
+<!--                </dependency>-->
             </dependencies>
         </profile>
 
