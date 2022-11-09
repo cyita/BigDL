@@ -96,7 +96,9 @@ class OpenVINOModel:
             maximal_drop=0.999,
             max_iter_num=1,
             n_requests=None,
-            sample_size=300) -> Model:
+            sample_size=300, 
+            ov_engine=None, 
+            algorithms=None) -> Model:
         from openvino.tools.pot.graph import load_model, save_model
         from openvino.tools.pot.engines.ie_engine import IEEngine
         from openvino.tools.pot.pipeline.initializer import create_pipeline
@@ -130,32 +132,37 @@ class OpenVINOModel:
         engine_config = {"device": "CPU",
                          "stat_requests_number": n_requests,
                          "eval_requests_number": n_requests}
-        engine = IEEngine(config=engine_config, data_loader=dataloader, metric=metric)
+        
+        if ov_engine:
+            engine = ov_engine
+        else:
+            engine = IEEngine(config=engine_config, data_loader=dataloader, metric=metric)
 
-        algorithms = [
-            {
-                "name": "DefaultQuantization",
-                "params": {
-                    "target_device": "CPU",
-                    "preset": "performance",
-                    "stat_subset_size": sample_size,
-                },
-            }
-        ]
-        if metric:
+        if not algorithms:
             algorithms = [
                 {
-                    "name": "AccuracyAwareQuantization",
+                    "name": "DefaultQuantization",
                     "params": {
                         "target_device": "CPU",
                         "preset": "performance",
                         "stat_subset_size": sample_size,
-                        "maximal_drop": maximal_drop,
-                        "max_iter_num": max_iter_num,
-                        "drop_type": drop_type,
                     },
                 }
             ]
+            if metric:
+                algorithms = [
+                    {
+                        "name": "AccuracyAwareQuantization",
+                        "params": {
+                            "target_device": "CPU",
+                            "preset": "performance",
+                            "stat_subset_size": sample_size,
+                            "maximal_drop": maximal_drop,
+                            "max_iter_num": max_iter_num,
+                            "drop_type": drop_type,
+                        },
+                    }
+                ]
 
         pipeline = create_pipeline(algorithms, engine)
         compressed_model = pipeline.run(model=model)
