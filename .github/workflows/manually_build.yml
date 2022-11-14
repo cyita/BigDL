@@ -300,10 +300,36 @@ jobs:
         echo "####### big-data-ml-python-gramine ####"
         echo "########################################"
         export base_image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-gramine-base
-        ### debug log level
-        export image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-gramine-noattest-32g-debug
         cd ppml/trusted-big-data-ml/python/docker-gramine/bigdl-gramine
         openssl genrsa -3 -out enclave-key.pem 3072
+        ### 16G sgx mem size
+        export image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-gramine-noattest-16g
+        sudo docker build \
+         --build-arg BASE_IMAGE_NAME=${base_image} \
+         --build-arg BASE_IMAGE_TAG=${TAG} \
+         --build-arg SGX_MEM_SIZE=16G \
+         --build-arg SGX_LOG_LEVEL=error \
+         --build-arg ENABLE_DCAP_ATTESTATION=false \
+         -t ${image}:${TAG} -f ./Dockerfile .
+        sudo docker push ${image}:${TAG}
+        sudo docker tag ${image}:${TAG} 10.239.45.10/arda/${image}:${TAG}
+        sudo docker push 10.239.45.10/arda/${image}:${TAG}
+        sudo docker rmi -f ${image}:${TAG}
+        ###
+        export image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-gramine-noattest-16g-debug
+        sudo docker build \
+         --build-arg BASE_IMAGE_NAME=${base_image} \
+         --build-arg BASE_IMAGE_TAG=${TAG} \
+         --build-arg SGX_MEM_SIZE=16G \
+         --build-arg SGX_LOG_LEVEL=debug \
+         --build-arg ENABLE_DCAP_ATTESTATION=false \
+         -t ${image}:${TAG} -f ./Dockerfile .
+        sudo docker push ${image}:${TAG}
+        sudo docker tag ${image}:${TAG} 10.239.45.10/arda/${image}:${TAG}
+        sudo docker push 10.239.45.10/arda/${image}:${TAG}
+        sudo docker rmi -f ${image}:${TAG}
+        ### debug log level
+        export image=intelanalytics/bigdl-ppml-trusted-big-data-ml-python-gramine-noattest-32g-debug
         sudo docker build \
          --build-arg BASE_IMAGE_NAME=${base_image} \
          --build-arg BASE_IMAGE_TAG=${TAG} \
@@ -466,7 +492,7 @@ jobs:
           echo "########################################"
           echo "####### big-data-ml-scala-occlum-production  ######"
           echo "########################################"
-          cd ppml/trusted-big-data-ml/scala/docker-occlum/production
+          cd ppml/trusted-big-data-ml/scala/docker-occlum
           export image=intelanalytics/bigdl-ppml-trusted-big-data-ml-scala-occlum-production
           pwd
           docker build \
@@ -481,11 +507,17 @@ jobs:
             --build-arg JDK_URL=${JDK_URL} \
             --build-arg no_proxy=${NO_PROXY} \
             --build-arg SPARK_JAR_REPO_URL=${SPARK_JAR_REPO_URL} \
-            -t ${image}:${TAG} -f ./Dockerfile .
-          sudo docker push ${image}:${TAG}
-          docker tag ${image}:${TAG} 10.239.45.10/arda/${image}:${TAG}
-          docker push 10.239.45.10/arda/${image}:${TAG}
-          docker rmi -f ${image}:${TAG}
+            -t ${image}:${TAG} -f ./production/Dockerfile .
+          pwd
+          cd /home/arda/github-action-runner/actions-runner/_work/BigDL/BigDL/ppml/trusted-big-data-ml/scala/docker-occlum
+          export image_name=${image}:${TAG}
+          export final_name=${image_name}-build
+          export container_name=${TAG}-container
+          bash ./production/occlum-build.sh -c $container_name -i $image_name -f $final_name
+          sudo docker push ${final_name}
+          docker tag ${final_name} 10.239.45.10/arda/${final_name}
+          docker push 10.239.45.10/arda/${final_name}
+          docker rmi -f ${final_name}
 
 
   bigdl-ppml-trusted-realtime-ml-scala-graphene:
