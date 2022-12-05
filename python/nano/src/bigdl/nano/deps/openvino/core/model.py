@@ -97,7 +97,9 @@ class OpenVINOModel:
             max_iter_num=1,
             n_requests=None,
             sample_size=300, 
-            ov_engine=None, 
+            preset="performance",
+            model_type=None,
+            engine_class=None,
             algorithms=None) -> Model:
         from openvino.tools.pot.graph import load_model, save_model
         from openvino.tools.pot.engines.ie_engine import IEEngine
@@ -132,9 +134,8 @@ class OpenVINOModel:
         engine_config = {"device": "CPU",
                          "stat_requests_number": n_requests,
                          "eval_requests_number": n_requests}
-        
-        if ov_engine:
-            engine = ov_engine
+        if engine_class:
+            engine = engine_class(config=engine_config, data_loader=dataloader, metric=metric)
         else:
             engine = IEEngine(config=engine_config, data_loader=dataloader, metric=metric)
 
@@ -144,8 +145,9 @@ class OpenVINOModel:
                     "name": "DefaultQuantization",
                     "params": {
                         "target_device": "CPU",
-                        "preset": "performance",
+                        "preset": preset,
                         "stat_subset_size": sample_size,
+                        "model_type": model_type,
                     },
                 }
             ]
@@ -155,7 +157,7 @@ class OpenVINOModel:
                         "name": "AccuracyAwareQuantization",
                         "params": {
                             "target_device": "CPU",
-                            "preset": "performance",
+                            "preset": preset,
                             "stat_subset_size": sample_size,
                             "maximal_drop": maximal_drop,
                             "max_iter_num": max_iter_num,
