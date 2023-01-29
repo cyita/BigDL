@@ -1,15 +1,15 @@
 ##### RecallInitializer Config
 
 # default: 128, the dimensionality of the embedding vectors
-indexDim: 50
+indexDim:
 
 # default: null, path to saved index path, must be provided
-indexPath: ./item_50.idx
+indexPath: ./item_128.idx
 
-itemIDColumn: tweet_id
+itemIDColumn: classroom_id
 itemEmbeddingColumn: prediction
 
 # default: null, Only support parquet file
-initialDataPath: /home/yina/Documents/data/friesian-demo/vec_feature_item_prediction.parquet
+initialDataPath: /home/yina/Documents/xuetang/xuetang/part/item_ebd.parquet
 
-part: 27
+# part: 27

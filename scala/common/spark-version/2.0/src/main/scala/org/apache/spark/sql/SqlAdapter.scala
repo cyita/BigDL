@@ -21,7 +21,8 @@ import org.apache.spark.sql.types.DataType
 object SqlAdapter {
 
   def getUDF(f: AnyRef, dataType: DataType): UserDefinedFunction = {
-    UserDefinedFunction(f, dataType, None)
+//    UserDefinedFunction(f, dataType, None)
+    null
   }
 
 }

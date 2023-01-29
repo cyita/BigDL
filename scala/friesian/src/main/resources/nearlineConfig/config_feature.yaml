@@ -8,18 +8,18 @@ redisClusterItemSlotType: 2
 
 # default: null, one of initialUserDataPath or initialItemDataPath must be
 # provided. Only support parquet file
-initialUserDataPath: /home/yina/Documents/data/friesian-demo/wnd_user_2000.parquet
-initialItemDataPath: /home/yina/Documents/data/friesian-demo/wnd_item_1000.parquet
+initialUserDataPath: /home/yina/Documents/xuetang/xuetang/part/wnd_user.parquet
+initialItemDataPath: /home/yina/Documents/xuetang/xuetang/part/wnd_item.parquet
 
 # default: null, if loadInitialData=true and initialUserDataPath != null, userIDColumn and
 # userFeatureColumns must be provided
-userIDColumn: enaging_user_id
-userFeatureColumns: enaging_user_follower_count, enaging_user_following_count, enaging_user_is_verified
+userIDColumn: user_id
+userFeatureColumns: area_code, terminal_type, user_id
 
 # default: null, if loadInitialData=true and initialItemDataPath != null, userIDColumn and
 # userFeatureColumns must be provided
-itemIDColumn: tweet_id
-itemFeatureColumns: present_media, language, tweet_type, engaged_with_user_follower_count,engaged_with_user_following_count, len_hashtags, len_domains, len_links, present_media_language, engaged_with_user_is_verified
+itemIDColumn: classroom_id
+itemFeatureColumns: maker_name, classify_cn, coursecode_parent_name, classroom_id, course_name, avg_chapter_title, short_intro, avg_video_duration
 
 ### Redis Configuration
 # default: localhost:6379
