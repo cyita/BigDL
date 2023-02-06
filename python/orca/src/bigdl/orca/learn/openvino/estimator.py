@@ -65,7 +65,7 @@ class OpenvinoEstimator(SparkEstimator):
                 data: Union["SparkXShards", "DataFrame", "np.ndarray", List["np.ndarray"]],
                 feature_cols: Optional[List[str]] = None,
                 batch_size: Optional[int] = 4,
-                input_cols: Optional[Union[str, List[str]]]=None
+                input_cols: Optional[Union[str, List[str]]]=None, original=False,
                 ) -> Optional[Union["SparkXShards", "DataFrame", "np.ndarray", List["np.ndarray"]]]:
         """
         Predict input data
@@ -106,7 +106,10 @@ class OpenvinoEstimator(SparkEstimator):
             model_bytes = model_bytes_broadcast.value
             weight_bytes = weight_bytes_broadcast.value
             ie = IECore()
-            config = {'CPU_THREADS_NUM': str(self.core_num)}
+            config = {
+                'CPU_THREADS_NUM': str(self.core_num), 
+                "CPU_BIND_THREAD": "HYBRID_AWARE"
+            }
             ie.set_config(config, 'CPU')
             net = ie.read_network(model=model_bytes,
                                   weights=weight_bytes, init_from_buffer=True)
@@ -163,7 +166,10 @@ class OpenvinoEstimator(SparkEstimator):
                 del batch_pred
                 return temp_result_list
 
-            if not is_df:
+            if not original:
+                if is_df:
+                    from bigdl.orca.learn.utils import get_arrow_hex_str
+
                 for batch_data in partition:
                     input_dict = dict()
                     elem_num = 0
@@ -175,11 +181,22 @@ class OpenvinoEstimator(SparkEstimator):
                     infer_request.infer(input_dict)
                     if len(outputs) == 1:
                         pred = infer_request.output_blobs[outputs[0]].buffer[:elem_num]
+                        if is_df:
+                            for p in pred:
+                                yield get_arrow_hex_str([[p.flatten()]], names=outputs)
                     else:
                         pred = list(map(lambda output:
                                         infer_request.output_blobs[output].buffer[:elem_num],
                                         outputs))
-                    yield pred
+                        if is_df:
+                            for i in range(elem_num):
+                                single_r = []
+                                for p in pred:
+                                    single_r.append([p[i].flatten()])
+                                yield get_arrow_hex_str(single_r, names=outputs)
+                    
+                    if not is_df:
+                        yield pred
             else:
                 batch_dict = {col: [] for col in feature_cols}
                 batch_row = []
@@ -206,6 +223,49 @@ class OpenvinoEstimator(SparkEstimator):
                     for p in pred:
                         yield p
                     del pred
+            # if not is_df:
+            #     for batch_data in partition:
+            #         input_dict = dict()
+            #         elem_num = 0
+            #         if isinstance(batch_data, list):
+            #             for i, input in enumerate(input_cols):
+            #                 input_dict[input], elem_num = add_elem(batch_data[i])
+            #         else:
+            #             input_dict[input_cols[0]], elem_num = add_elem(batch_data)
+            #         infer_request.infer(input_dict)
+            #         if len(outputs) == 1:
+            #             pred = infer_request.output_blobs[outputs[0]].buffer[:elem_num]
+            #         else:
+            #             pred = list(map(lambda output:
+            #                             infer_request.output_blobs[output].buffer[:elem_num],
+            #                             outputs))
+            #         yield pred
+            # else:
+            #     batch_dict = {col: [] for col in feature_cols}
+            #     batch_row = []
+            #     cnt = 0
+            #     schema_dict = {col: schema[col].dataType for col in feature_cols}
+            #     import pyspark.sql.types as df_types
+            #     from pyspark.ml.linalg import DenseVector
+            #     from bigdl.orca.learn.utils import get_arrow_hex_str
+            #     for row in partition:
+            #         cnt += 1
+            #         batch_row.append(row)
+            #         for col in feature_cols:
+            #             batch_dict[col].append(row[col])
+            #         if cnt >= batch_size:
+            #             pred = generate_output_row(batch_dict)
+            #             for p in pred:
+            #                 yield p
+            #             del pred
+            #             batch_dict = {col: [] for col in feature_cols}
+            #             batch_row = []
+            #             cnt = 0
+            #     if cnt > 0:
+            #         pred = generate_output_row(batch_dict)
+            #         for p in pred:
+            #             yield p
+            #         del pred
             del local_model
             del net
 
@@ -215,7 +275,7 @@ class OpenvinoEstimator(SparkEstimator):
             feature_data = dict_data["x"]
             if isinstance(feature_data, np.ndarray):
                 invalidInputError(feature_data.shape[0] <= batch_size,
-                                  "The batch size of input data (the second dim) should be less"
+                                  "The batch size of input data (the first dim) should be less"
                                   " than the model batch size, otherwise some inputs will"
                                   " be ignored.")
             elif isinstance(feature_data, list):
@@ -224,7 +284,7 @@ class OpenvinoEstimator(SparkEstimator):
                                       "Each element in the x list should be a ndarray,"
                                       " but get " + elem.__class__.__name__)
                     invalidInputError(elem.shape[0] <= batch_size,
-                                      "The batch size of each input data (the second dim) should"
+                                      "The batch size of each input data (the first dim) should"
                                       " be less than the model batch size, otherwise some inputs"
                                       " will be ignored.")
             else:
@@ -238,23 +298,18 @@ class OpenvinoEstimator(SparkEstimator):
             return shard
 
         if isinstance(data, DataFrame):
-            # TODO: merge changes
             is_df = True
             schema = data.schema
+            xshards = spark_df_to_pd_sparkxshards(data)
+            pd_sparkxshards = process_xshards_of_pandas_dataframe(xshards,
+                                                                  feature_cols=feature_cols)
+            a = pd_sparkxshards.collect()
+            transformed_data = pd_sparkxshards.transform_shard(predict_transform, batch_size)
+            
             result = data.rdd.mapPartitions(lambda iter: partition_inference(iter))
             result_df = openvino_output_to_sdf(data, result, outputs,
                                                list(self.output_dict.values()))
             return result_df
-#             xshards = spark_df_to_pd_sparkxshards(data)
-#             pd_sparkxshards = process_xshards_of_pandas_dataframe(xshards,
-#                                                                   feature_cols=feature_cols)
-#
-#             transformed_data = pd_sparkxshards.transform_shard(predict_transform, batch_size)
-#             result_rdd = transformed_data.rdd.mapPartitions(lambda iter: partition_inference(iter))
-#
-#             pred_shards = SparkXShards(pd_sparkxshards.rdd.zip(result_rdd).map(update_result_shard))
-#             res_shards = add_predict_to_pd_xshards(xshards, pred_shards)
-#             return res_shards.to_spark_df()
         elif isinstance(data, SparkXShards):
             transformed_data = data.transform_shard(predict_transform, batch_size)
             result_rdd = transformed_data.rdd.mapPartitions(lambda iter: partition_inference(iter))
@@ -263,14 +318,14 @@ class OpenvinoEstimator(SparkEstimator):
             if isinstance(data, np.ndarray):
                 split_num = math.ceil(len(data)/batch_size)
                 arrays = np.array_split(data, split_num)
-                num_slices = min(split_num, self.node_num)
-                data_rdd = sc.parallelize(arrays, numSlices=num_slices)
+                # num_slices = min(split_num, self.node_num)
+                data_rdd = sc.parallelize(arrays, numSlices=split_num)
             elif isinstance(data, list):
                 flattened = nest.flatten(data)
                 data_length = len(flattened[0])
                 data_to_be_rdd = []  # type: ignore
                 split_num = math.ceil(flattened[0].shape[0]/batch_size)
-                num_slices = min(split_num, self.node_num)
+                # num_slices = min(split_num, self.node_num)
                 for i in range(split_num):
                     data_to_be_rdd.append([])
                 for x in flattened:
@@ -286,7 +341,7 @@ class OpenvinoEstimator(SparkEstimator):
                         data_to_be_rdd[idx].append(x_part)
 
                 data_to_be_rdd = [nest.pack_sequence_as(data, shard) for shard in data_to_be_rdd]
-                data_rdd = sc.parallelize(data_to_be_rdd, numSlices=num_slices)
+                data_rdd = sc.parallelize(data_to_be_rdd, numSlices=split_num)
 
             print("Partition number: ", data_rdd.getNumPartitions())
             result_rdd = data_rdd.mapPartitions(lambda iter: partition_inference(iter))
