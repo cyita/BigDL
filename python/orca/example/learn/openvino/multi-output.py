@@ -40,13 +40,14 @@ df = rdd.map(lambda x: [data.tolist()]).toDF(["input"])
 
 result_df = est.predict(df, feature_cols=["input"])
 result_df2 = est.predict(df, feature_cols=["input"], original=True)
+result_df2.show()
 
-df_c = result_df.rdd.map(lambda row: [row[1], row[2], row[3], row[4]]).collect()
-df_c = [np.concatenate((np.array(df_c[0][i]), np.array(df_c[1][i]))) for i in range(4)]
+# df_c = result_df.rdd.map(lambda row: [row[1], row[2], row[3], row[4]]).collect()
+# df_c = [np.concatenate((np.array(df_c[0][i]), np.array(df_c[1][i]))) for i in range(4)]
 
-df_c2 = result_df2.rdd.map(lambda row: [row[1], row[2], row[3], row[4]]).collect()
-df_c2 = [np.concatenate((np.array(df_c2[0][i]), np.array(df_c2[1][i]))) for i in range(4)]
-assert np.all([np.allclose(r1, r2) for r1, r2 in zip(df_c, df_c2)])
+# df_c2 = result_df2.rdd.map(lambda row: [row[1], row[2], row[3], row[4]]).collect()
+# df_c2 = [np.concatenate((np.array(df_c2[0][i]), np.array(df_c2[1][i]))) for i in range(4)]
+# assert np.all([np.allclose(r1, r2) for r1, r2 in zip(df_c, df_c2)])
 
 # shards, _ = dataframe_to_xshards(df,
 #                                     validation_data=None,

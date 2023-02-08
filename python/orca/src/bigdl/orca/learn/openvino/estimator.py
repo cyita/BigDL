@@ -65,7 +65,7 @@ class OpenvinoEstimator(SparkEstimator):
                 data: Union["SparkXShards", "DataFrame", "np.ndarray", List["np.ndarray"]],
                 feature_cols: Optional[List[str]] = None,
                 batch_size: Optional[int] = 4,
-                input_cols: Optional[Union[str, List[str]]]=None, original=False,
+                input_cols: Optional[Union[str, List[str]]]=None, original=False, config=None,
                 ) -> Optional[Union["SparkXShards", "DataFrame", "np.ndarray", List["np.ndarray"]]]:
         """
         Predict input data
@@ -101,15 +101,17 @@ class OpenvinoEstimator(SparkEstimator):
         invalidInputError(len(outputs) != 0, "The number of model outputs should not be 0.")
         is_df = False
         schema = None
+        if config is None:
+            config = {
+                'CPU_THREADS_NUM': str(self.core_num), 
+                "CPU_BIND_THREAD": "HYBRID_AWARE"
+            }
+        print(config)
 
         def partition_inference(partition):
             model_bytes = model_bytes_broadcast.value
             weight_bytes = weight_bytes_broadcast.value
             ie = IECore()
-            config = {
-                'CPU_THREADS_NUM': str(self.core_num), 
-                "CPU_BIND_THREAD": "HYBRID_AWARE"
-            }
             ie.set_config(config, 'CPU')
             net = ie.read_network(model=model_bytes,
                                   weights=weight_bytes, init_from_buffer=True)
@@ -300,15 +302,19 @@ class OpenvinoEstimator(SparkEstimator):
         if isinstance(data, DataFrame):
             is_df = True
             schema = data.schema
-            xshards = spark_df_to_pd_sparkxshards(data)
-            pd_sparkxshards = process_xshards_of_pandas_dataframe(xshards,
-                                                                  feature_cols=feature_cols)
-            a = pd_sparkxshards.collect()
-            transformed_data = pd_sparkxshards.transform_shard(predict_transform, batch_size)
-            
-            result = data.rdd.mapPartitions(lambda iter: partition_inference(iter))
-            result_df = openvino_output_to_sdf(data, result, outputs,
-                                               list(self.output_dict.values()))
+            if original:
+                result = data.rdd.mapPartitions(lambda iter: partition_inference(iter))
+                result_df = openvino_output_to_sdf(data, result, outputs,
+                                                list(self.output_dict.values()))
+            else:
+                xshards = spark_df_to_pd_sparkxshards(data)
+                pd_sparkxshards = process_xshards_of_pandas_dataframe(xshards,
+                                                                    feature_cols=feature_cols)
+                transformed_data = pd_sparkxshards.transform_shard(predict_transform, batch_size)
+                
+                result = data.rdd.mapPartitions(lambda iter: partition_inference(iter))
+                result_df = openvino_output_to_sdf(data, result, outputs,
+                                                list(self.output_dict.values()))
             return result_df
         elif isinstance(data, SparkXShards):
             transformed_data = data.transform_shard(predict_transform, batch_size)
