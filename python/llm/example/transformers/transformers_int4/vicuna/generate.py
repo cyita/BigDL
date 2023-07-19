@@ -19,17 +19,16 @@ import time
 import argparse
 
 from bigdl.llm.transformers import AutoModelForCausalLM
-from transformers import AutoTokenizer, GenerationConfig
+from transformers import LlamaTokenizer
 
 # you could tune the prompt based on your own model,
-# here the prompt tuning refers to https://huggingface.co/spaces/mosaicml/mpt-30b-chat/blob/main/app.py
-MPT_PROMPT_FORMAT = "<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+# here the prompt tuning refers to https://github.com/lm-sys/FastChat/blob/main/docs/vicuna_weights_version.md#example-prompt-weights-v0
+Vicuna_PROMPT_FORMAT = "### Human:\n{prompt} \n ### Assistant:\n"
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Predict Tokens using `generate()` API for MPT model')
-    parser.add_argument('--repo-id-or-model-path', type=str, default="mosaicml/mpt-7b-chat",
-                        help='The huggingface repo id for the MPT models'
-                             '(e.g. `mosaicml/mpt-7b-chat` and `mosaicml/mpt-30b-chat`) to be downloaded'
+    parser = argparse.ArgumentParser(description='Predict Tokens using `generate()` API for Vicuna model')
+    parser.add_argument('--repo-id-or-model-path', type=str, default="lmsys/vicuna-13b-v1.3",
+                        help='The huggingface repo id for the Vicuna (e.g. `lmsys/vicuna-13b-v1.3` and `eachadea/vicuna-7b-1.1`) to be downloaded'
                              ', or the path to the huggingface checkpoint folder')
     parser.add_argument('--prompt', type=str, default="What is AI?",
                         help='Prompt to infer')
@@ -42,30 +41,23 @@ if __name__ == '__main__':
     # Load model in 4 bit,
     # which convert the relevant layers in the model into INT4 format
     model = AutoModelForCausalLM.from_pretrained(model_path,
-                                                 load_in_4bit=True,
-                                                 trust_remote_code=True)
+                                                 load_in_4bit=True)
 
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path,
-                                              trust_remote_code=True)
+    tokenizer = LlamaTokenizer.from_pretrained(model_path)
     
     # Generate predicted tokens
     with torch.inference_mode():
-        prompt = MPT_PROMPT_FORMAT.format(prompt=args.prompt)
+        prompt = Vicuna_PROMPT_FORMAT.format(prompt=args.prompt)
         input_ids = tokenizer.encode(prompt, return_tensors="pt")
+        st = time.time()
         # enabling `use_cache=True` allows the model to utilize the previous
         # key/values attentions to speed up decoding;
         # to obtain optimal performance with BigDL-LLM INT4 optimizations,
-        # it is important to set use_cache=True for MPT models
-        mpt_generation_config = GenerationConfig(
-            max_new_tokens=args.n_predict, 
-            use_cache=True, 
-            pad_token_id=tokenizer.eos_token_id, 
-            eos_token_id=tokenizer.eos_token_id
-        )
-        st = time.time()
+        # it is important to set use_cache=True for vicuna-v1.3 models
         output = model.generate(input_ids,
-                                generation_config=mpt_generation_config)
+                                use_cache=True,
+                                max_new_tokens=args.n_predict)
         end = time.time()
         output_str = tokenizer.decode(output[0], skip_special_tokens=True)
         print(f'Inference time: {end-st} s')

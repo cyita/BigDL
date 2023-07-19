@@ -19,19 +19,17 @@ import time
 import argparse
 
 from bigdl.llm.transformers import AutoModelForCausalLM
-from transformers import AutoTokenizer, GenerationConfig
+from transformers import AutoTokenizer
 
 # you could tune the prompt based on your own model,
-# here the prompt tuning refers to https://huggingface.co/spaces/mosaicml/mpt-30b-chat/blob/main/app.py
-MPT_PROMPT_FORMAT = "<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+StarCoder_PROMPT_FORMAT = "{prompt}"
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Predict Tokens using `generate()` API for MPT model')
-    parser.add_argument('--repo-id-or-model-path', type=str, default="mosaicml/mpt-7b-chat",
-                        help='The huggingface repo id for the MPT models'
-                             '(e.g. `mosaicml/mpt-7b-chat` and `mosaicml/mpt-30b-chat`) to be downloaded'
+    parser = argparse.ArgumentParser(description='Predict Tokens using `generate()` API for StarCoder model')
+    parser.add_argument('--repo-id-or-model-path', type=str, default="bigcode/starcoder",
+                        help='The huggingface repo id for the StarCoder to be downloaded'
                              ', or the path to the huggingface checkpoint folder')
-    parser.add_argument('--prompt', type=str, default="What is AI?",
+    parser.add_argument('--prompt', type=str, default="def print_hello_world():",
                         help='Prompt to infer')
     parser.add_argument('--n-predict', type=int, default=32,
                         help='Max tokens to predict')
@@ -51,21 +49,15 @@ if __name__ == '__main__':
     
     # Generate predicted tokens
     with torch.inference_mode():
-        prompt = MPT_PROMPT_FORMAT.format(prompt=args.prompt)
+        prompt = StarCoder_PROMPT_FORMAT.format(prompt=args.prompt)
         input_ids = tokenizer.encode(prompt, return_tensors="pt")
-        # enabling `use_cache=True` allows the model to utilize the previous
-        # key/values attentions to speed up decoding;
-        # to obtain optimal performance with BigDL-LLM INT4 optimizations,
-        # it is important to set use_cache=True for MPT models
-        mpt_generation_config = GenerationConfig(
-            max_new_tokens=args.n_predict, 
-            use_cache=True, 
-            pad_token_id=tokenizer.eos_token_id, 
-            eos_token_id=tokenizer.eos_token_id
-        )
         st = time.time()
+        # if your selected model is capable of utilizing previous key/value attentions
+        # to enhance decoding speed, but has `"use_cache": false` in its model config,
+        # it is important to set `use_cache=True` explicitly in the `generate` function
+        # to obtain optimal performance with BigDL-LLM INT4 optimizations
         output = model.generate(input_ids,
-                                generation_config=mpt_generation_config)
+                                max_new_tokens=args.n_predict)
         end = time.time()
         output_str = tokenizer.decode(output[0], skip_special_tokens=True)
         print(f'Inference time: {end-st} s')
