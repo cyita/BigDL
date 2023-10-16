@@ -351,9 +351,10 @@ class LowBitLinear(nn.Linear):
             # current workaround to reduce first token latency of fp32 input
             # sometimes fp16 cause nan and training instability
             # disable the conversion when training
-            if self.conver_to_half and x_2d.shape[0] > 1 and x_2d.dtype == torch.float32:
+            # if self.conver_to_half and x_2d.shape[0] > 1 and x_2d.dtype == torch.float32:
+            if self.conver_to_half and x_shape[0] > 1 and x_2d.dtype == torch.float32:
                 x_2d = x_2d.half()
-            input_seq_size = x_shape[1]
+            input_seq_size = x_shape[0]
             if self.training and x_2d.requires_grad:
                 result = MatMulLowBit.apply(x_2d, self.weight, input_seq_size)
             else:
