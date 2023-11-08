@@ -193,6 +193,18 @@ class FP4Params(torch.nn.Parameter):
         self.qtype = qtype
         self.convert_shape_only = convert_shape_only
         return self
+    
+    def convert_awq(self, w_bit, group_size, qweight, qzeros, scales, device=None, **kwargs):
+        scales = scales.contiguous().float()
+        qzeros = qzeros.contiguous()
+        qweight = self.data
+        invalidInputError(qweight.dtype == torch.int32, "Awq qweight must be torch.int32")
+        invalidInputError(qzeros.dtype == torch.int32, "Awq qzeros must be torch.int32.")
+        invalidInputError(scales.dtype == torch.float, "Awq scales must be torch.float32.")
+        
+        
+
+        return self
 
     def quantize(self, device=None):
         if not self.quantized:

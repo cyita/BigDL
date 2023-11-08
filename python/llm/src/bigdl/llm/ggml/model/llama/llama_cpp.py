@@ -1017,6 +1017,31 @@ _lib.ggml_dequantize.argtypes = [
 _lib.ggml_dequantize.restype = None
 
 
+def ggml_convert_awq(
+    qweight: ctypes.Array[ctypes.c_uint32],
+    dst: ctypes.c_void_p,
+    qzeros: ctypes.Array[ctypes.c_uint32],
+    scales: ctypes.Array[ctypes.c_float],
+    w_bit: ctypes.c_int,
+    group_size: ctypes.c_int,
+    n: ctypes.c_size_t,
+    k: ctypes.c_int
+):
+    _lib.ggml_convert_awq(qweight, dst, qzeros, scales, w_bit, group_size, n, k)
+
+
+_lib.ggml_convert_awq.argtypes = [
+    ctypes.POINTER(ctypes.c_uint32),
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_uint32),
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_size_t,
+    ctypes.c_int,
+]
+_lib.ggml_convert_awq.restype = ctypes.c_size_t
+
 def ggml_q_format_convet_cpu2xpu(
     src: ctypes.c_void_p,
     dst: ctypes.c_void_p,

@@ -105,7 +105,21 @@ class _BaseAutoModelClass:
             # load default
             model = cls.HF_Model.from_pretrained(*args, **kwargs)
 
+            # awq convert temp
+
+
         return model
+
+    @classmethod
+    def from_awq_model(cls, model):
+        from transformers.utils.quantization_config import AwqConfig
+        from bigdl.llm.transformers.awq import awq_convert
+        quant_conf = AwqConfig.from_dict(model.config.quantization_config)
+        assert quant_conf.quant_method == "awq", "Only support awq quant method."
+        assert quant_conf.backend == "autoawq", "Only support autoawq."
+        assert quant_conf.version == "gemm", "Only support awq GEMM."
+
+        return awq_convert(model)
 
     @classmethod
     def load_convert(cls, q_k, optimize_model, *args, **kwargs):
