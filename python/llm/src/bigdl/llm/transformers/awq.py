@@ -52,7 +52,7 @@ def ggml_convert_awq(w_bit: int, group_size: int, qweight: torch.Tensor,
                              device="cpu")
     dst = ctypes.c_void_p(dst_tensor.data.data_ptr())
     
-    ggml.ggml_convert_awq(qweight_src, dst, qzeros_src, scales_src, w_bit, group_size)
+    ggml.ggml_convert_awq(qweight_src, dst, qzeros_src, scales_src, w_bit, group_size, n, k)
     
     return dst_tensor
 
