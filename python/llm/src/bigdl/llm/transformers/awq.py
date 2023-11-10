@@ -6,6 +6,7 @@ import platform
 import ctypes
 from .utils import logger
 from awq.modules.linear import WQLinear_GEMM
+from bigdl.llm.utils.common import invalidInputError
 from bigdl.llm.ggml.quantize import ggml_tensor_qtype
 
 import bigdl.llm.ggml.model.llama.llama_cpp as ggml
@@ -31,9 +32,19 @@ def is_awq_linear(module):
     return result, extra_args
 
 
-def ggml_convert_awq(w_bit: int, group_size: int, qweight: torch.Tensor,
-                     qzeros: torch.Tensor, scales: torch.Tensor,
-                     n: int, k: int):
+def ggml_convert_awq(module):
+    qweight = module.qweight
+    qzeros = module.qzeros.contiguous()
+    scales = module.scales.contiguous().float()
+    w_bit = module.w_bit
+    group_size = module.group_size
+    n = module.in_features * module.out_features
+    k = module.in_features
+
+    invalidInputError(qweight.dtype == torch.int32, "Awq qweight must be torch.int32")
+    invalidInputError(qzeros.dtype == torch.int32, "Awq qzeros must be torch.int32.")
+    invalidInputError(scales.dtype == torch.float, "Awq scales must be torch.float32.")
+
     qtype = Q4_1
     QK = ggml.ggml_qk_size(qtype)
     block_size_in_bytes = ggml.ggml_type_size(qtype)
@@ -114,13 +125,12 @@ def _replace_awq_with_low_bit_linear(model, qtype, modules_to_not_convert=None,
 
                 device_type = module.qweight.data.device.type
                 # Copy the weights
-                paramsLowBit = FP4Params(data=module.qweight.data,
+                paramsLowBit = FP4Params(data=ggml_convert_awq(module),
                                          requires_grad=False,
-                                         quantized=False,
+                                         quantized=True,
                                          _shape=torch.Size([linear_args["out_features"], linear_args["in_features"]]),
                                          convert_shape_only=convert_shape_only,
                                          qtype=qtype)
-                paramsLowBit.convert_awq(**linear_args)
                 new_linear._parameters['weight'] = paramsLowBit
 
                 #  fp16 may generalize to other sizes later

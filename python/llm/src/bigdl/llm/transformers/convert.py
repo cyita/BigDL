@@ -49,6 +49,12 @@ from .utils import logger
 def is_deepspeed_available():
     return importlib.util.find_spec("deepspeed") is not None
 
+def is_auto_awq_available():
+    return importlib.util.find_spec("awq") is not None
+
+if is_auto_awq_available():
+    from awq.modules.linear import WQLinear_GEMM
+    from bigdl.llm.transformers.awq import ggml_convert_awq
 
 def is_linear_module(module):
 
@@ -56,7 +62,12 @@ def is_linear_module(module):
     out_features = None
     mp_group = None
 
-    if isinstance(module, nn.Linear):
+    if isinstance(module, WQLinear_GEMM):
+        in_features = module.in_features
+        out_features = module.out_features
+        mp_group = None
+        result = True
+    elif isinstance(module, nn.Linear):
         in_features = module.in_features
         out_features = module.out_features
         mp_group = None
@@ -100,7 +111,25 @@ def _replace_with_low_bit_linear(model, qtype, modules_to_not_convert=None,
                 in_features, out_features, mp_group = linear_args
                 with init_empty_weights():
                     new_linear = None
-                    if qtype != ggml_tensor_qtype["fp16"]:
+                    if is_auto_awq_available() and isinstance(module, WQLinear_GEMM):
+                        new_linear = LowBitLinear(
+                            in_features,
+                            out_features,
+                            qtype=qtype,
+                            bias=module.bias is not None,
+                            mp_group=mp_group,
+                        )
+
+                        device_type = module.qweight.data.device.type
+                        # Copy the weights
+                        paramsLowBit = FP4Params(data=ggml_convert_awq(module),
+                                                 requires_grad=False,
+                                                 quantized=True,
+                                                 _shape=(out_features, in_features),
+                                                 convert_shape_only=convert_shape_only,
+                                                 qtype=qtype).to(device_type)
+                        new_linear._parameters['weight'] = paramsLowBit
+                    elif qtype != ggml_tensor_qtype["fp16"]:
                         new_linear = LowBitLinear(
                             in_features,
                             out_features,
