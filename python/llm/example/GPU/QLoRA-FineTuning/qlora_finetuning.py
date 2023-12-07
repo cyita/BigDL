@@ -42,7 +42,8 @@ if __name__ == "__main__":
     # data = load_dataset(dataset_path)
     # data = data.map(lambda samples: tokenizer(samples["quote"]), batched=True)
     model = AutoModelForCausalLM.from_pretrained(model_path,
-                                                load_in_low_bit="nf4",
+                                                # load_in_low_bit="nf4",
+                                                load_in_low_bit="sym_int4",
                                                 optimize_model=False,
                                                 torch_dtype=torch.float16,
                                                 modules_to_not_convert=["lm_head"],)
@@ -58,7 +59,8 @@ if __name__ == "__main__":
         target_modules=["up_proj", "down_proj", "gate_proj"],
         lora_dropout=0.0, 
         bias="none", 
-        task_type="CAUSAL_LM"
+        task_type="CAUSAL_LM",
+        use_fast_lora=True,
     )
     model = get_peft_model(model, config)
     model

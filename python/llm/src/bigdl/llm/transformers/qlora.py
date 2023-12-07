@@ -160,6 +160,7 @@ from dataclasses import dataclass, field
 class LoraConfig(LoraConfigBase):
 
     qa_lora: bool = field(default=False, metadata={"help": "enable qa-lora"})
+    use_fast_lora: bool = field(default=False, metadata={"help": "enable fast_lora"})
 
 
 def get_peft_model(*args, **kwargs):
@@ -176,8 +177,14 @@ def get_peft_model(*args, **kwargs):
         cast_lora_weight(model, torch.bfloat16)
         torch.xpu.synchronize()
 
-    fast_lora = kwargs.get("use_fast_lora", False)
+    lora_config = {}
+    if len(args) >= 2:
+        lora_config = args[1]
+    else:
+        lora_config = kwargs.get("peft_config", {})
+    fast_lora = lora_config.use_fast_lora
     if fast_lora:
+        invalidInputError(lora_config.lora_dropout == 0, "Fast lora only support lora_dropout=0 now.")
         # Do patching
         # TODO: other models
         from bigdl.llm.transformers.awq.awq import get_blocks
@@ -190,7 +197,7 @@ def get_peft_model(*args, **kwargs):
 
                 layer.mlp.forward = types.MethodType(apply_lora_mlp, layer.mlp)
 
-                gateW, gateA, gateB, gateS = get_lora_parameters(layer.mlp.gate_proj)
+                gateW, gateQType, gateA, gateB, gateS = get_lora_parameters(layer.mlp.gate_proj)
                 gateW
             pass
 

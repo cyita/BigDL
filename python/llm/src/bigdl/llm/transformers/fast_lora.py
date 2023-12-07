@@ -14,6 +14,7 @@
 
 import torch
 from transformers.activations import SiLUActivation
+from bigdl.llm.transformers.utils import get_autocast_dtype
 
 def get_lora_parameters(proj):
     active_adapter = proj.active_adapters[0] if \
@@ -23,13 +24,15 @@ def get_lora_parameters(proj):
     A = proj.lora_A [active_adapter].weight
     B = proj.lora_B [active_adapter].weight
     s = proj.scaling[active_adapter]
-    return W, A, B, s
+    qtype = base_layer.qtype
+    return W, qtype, A, B, s
 pass
 
 
 def matmul_lora(X, W, W_quant, A, B, s, out = None):
     dtype = X.dtype
-    W = fast_dequantize(W.t(), W_quant)
+    device = X.device.type
+    
     A, B = A.t(), B.t()
 
     if X.dim() == 3:
@@ -40,7 +43,16 @@ def matmul_lora(X, W, W_quant, A, B, s, out = None):
         reshape = False
     pass
 
-    out = torch.matmul(X, W, out = out)
+    if device == "xpu":
+        import linear_q4_0
+        out = linear_q4_0.forward_new(X, W, W_quant, seq_len)
+    else:
+        # TODO
+        from bigdl.llm.transformers.low_bit_linear import ggml_matmul_src1_x_src0_t
+        # W = fast_dequantize(W.t(), W_quant)
+        # out = torch.matmul(X, W, out = out)
+        out = ggml_matmul_src1_x_src0_t(W, X, self.weight_shape, W_quant)
+    
     if W_quant is not None: del W
     out += (X @ A.to(dtype)) @ (s * B.to(dtype))
     return out.view(batch, seq_len, -1) if reshape else out
@@ -89,15 +101,20 @@ class LoRA_MLP(torch.autograd.Function):
                 gateW, gateW_quant, gateA, gateB, gateS,
                   upW,   upW_quant, upA,   upB,   upS,
                 downW, downW_quant, downA, downB, downS):
+        autocast_dtype = get_autocast_dtype(X)
+        if X.device.type == "xpu":
+            # force to use bf16 on gpu
+            X = X.to(torch.bfloat16)
+        elif autocast_dtype is not None:
+            X = X.to(autocast_dtype)
         dtype = X.dtype
-        act = SiLUActivation()
 
         e = matmul_lora(X, gateW, gateW_quant, gateA, gateB, gateS)
         g = matmul_lora(X,   upW,   upW_quant,  upA,   upB,   upS)
         # h = swiglu_fg_kernel(e, g)
         # TODO: fuse activation
         # TODO: other models
-        f = act(e)
+        f = e * torch.nn.functional.sigmoid(e)
         h = f * g
 
         i = matmul_lora(h, downW, downW_quant, downA, downB, downS)
@@ -170,17 +187,26 @@ class LoRA_MLP(torch.autograd.Function):
         d_gateA *= gateS
         d_gateB *= gateS
 
+        if X.device.type == "xpu":
+            import linear_q4_0
+            upW = linear_q4_0.dequant(X, upW, upW_quant)
+            gateW = linear_q4_0.dequant(X, gateW, gateW_quant)
+        else:
+            # TODO: weight original shape
+            pass
+
         # dC/dX = (D @ W.T * f)      @ (U.T + B.T @ A.T)
         #       + (D @ W.T * df * g) @ (G.T + B.T @ A.T)
         # (D @ W.T * f) @ U.T
-        upW = fast_dequantize(upW.t(), upW_quant)
+        # Replace
+        # upW = fast_dequantize(upW.t(), upW_quant)
         # (D @ W.T * f) @ (U.T + B.T @ A.T)
         dX = torch.matmul(DW_f, upW.t(), out = X)
         del upW
         dX += DW_f @ upB.to(dtype).t() @ (upS * upA.to(dtype).t())
 
         # (D @ W.T * f) @ (U.T + B.T @ A.T) + (D @ W.T * df * g) @ G.T
-        gateW = fast_dequantize(gateW.t(), gateW_quant)
+        # gateW = fast_dequantize(gateW.t(), gateW_quant)
         # (D @ W.T * f) @ (U.T + B.T @ A.T) + (D @ W.T * df * g) @ (G.T + B.T @ A.T)
         dX += DW_dfg @ gateW.t()
         del gateW
