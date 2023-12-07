@@ -39,14 +39,14 @@ if __name__ == "__main__":
     dataset_path = args.dataset
     tokenizer = LlamaTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
-    data = load_dataset(dataset_path)
-    data = data.map(lambda samples: tokenizer(samples["quote"]), batched=True)
+    # data = load_dataset(dataset_path)
+    # data = data.map(lambda samples: tokenizer(samples["quote"]), batched=True)
     model = AutoModelForCausalLM.from_pretrained(model_path,
                                                 load_in_low_bit="nf4",
                                                 optimize_model=False,
                                                 torch_dtype=torch.float16,
                                                 modules_to_not_convert=["lm_head"],)
-    model = model.to('xpu')
+    # model = model.to('xpu')
     # Enable gradient_checkpointing if your memory is not enough,
     # it will slowdown the training speed
     # model.gradient_checkpointing_enable()
@@ -54,33 +54,35 @@ if __name__ == "__main__":
     config = LoraConfig(
         r=8, 
         lora_alpha=32, 
-        target_modules=["q_proj", "k_proj", "v_proj"], 
-        lora_dropout=0.05, 
+        # target_modules=["q_proj", "k_proj", "v_proj"], 
+        target_modules=["up_proj", "down_proj", "gate_proj"],
+        lora_dropout=0.0, 
         bias="none", 
         task_type="CAUSAL_LM"
     )
     model = get_peft_model(model, config)
+    model
 
-    tokenizer.pad_token_id = 0
-    tokenizer.padding_side = "left"
-    trainer = transformers.Trainer(
-        model=model,
-        train_dataset=data["train"],
-        args=transformers.TrainingArguments(
-            per_device_train_batch_size=4,
-            gradient_accumulation_steps= 1,
-            warmup_steps=20,
-            max_steps=200,
-            learning_rate=2e-5,
-            save_steps=100,
-            bf16=True,  # bf16 is more stable in training
-            logging_steps=20,
-            output_dir="outputs",
-            optim="adamw_hf", # paged_adamw_8bit is not supported yet
-            # gradient_checkpointing=True, # can further reduce memory but slower
-        ),
-        data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
-    )
-    model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
-    result = trainer.train()
-    print(result)
+    # tokenizer.pad_token_id = 0
+    # tokenizer.padding_side = "left"
+    # trainer = transformers.Trainer(
+    #     model=model,
+    #     train_dataset=data["train"],
+    #     args=transformers.TrainingArguments(
+    #         per_device_train_batch_size=4,
+    #         gradient_accumulation_steps= 1,
+    #         warmup_steps=20,
+    #         max_steps=200,
+    #         learning_rate=2e-5,
+    #         save_steps=100,
+    #         bf16=True,  # bf16 is more stable in training
+    #         logging_steps=20,
+    #         output_dir="outputs",
+    #         optim="adamw_hf", # paged_adamw_8bit is not supported yet
+    #         # gradient_checkpointing=True, # can further reduce memory but slower
+    #     ),
+    #     data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False),
+    # )
+    # model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
+    # result = trainer.train()
+    # print(result)

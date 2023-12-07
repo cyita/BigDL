@@ -48,6 +48,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import types
 import torch
 from bigdl.llm.transformers.low_bit_linear import LowBitLinear
 from peft.tuners.lora import LoraLayer
@@ -155,6 +156,40 @@ def get_peft_model(*args, **kwargs):
     if model.device.type == "xpu":
         cast_lora_weight(model, torch.bfloat16)
         torch.xpu.synchronize()
+
+    fast_lora = kwargs.get("use_fast_lora", False)
+    if fast_lora:
+        # Do patching
+        # TODO: other models
+        from bigdl.llm.transformers.awq.awq import get_blocks
+        from bigdl.llm.transformers.fast_lora import apply_lora_mlp, apply_lora_qkv, apply_lora_o, get_lora_parameters
+        for idx, layer in enumerate(get_blocks(model.model)):
+            # MLP patching
+            if  hasattr(layer.mlp.gate_proj, "lora_A") and \
+                hasattr(layer.mlp.  up_proj, "lora_A") and \
+                hasattr(layer.mlp.down_proj, "lora_A"):
+
+                layer.mlp.forward = types.MethodType(apply_lora_mlp, layer.mlp)
+
+                gateW, gateA, gateB, gateS = get_lora_parameters(layer.mlp.gate_proj)
+                gateW
+            pass
+
+            # QKV attention patching
+            if  hasattr(layer.self_attn.q_proj, "lora_A") and \
+                hasattr(layer.self_attn.k_proj, "lora_A") and \
+                hasattr(layer.self_attn.v_proj, "lora_A"):
+
+                layer.self_attn.apply_qkv = apply_lora_qkv
+            pass
+
+            # O attention patching
+            if hasattr(layer.self_attn.o_proj, "lora_A"):
+
+                layer.self_attn.apply_o = apply_lora_o
+            pass
+        pass
+
 
     return model
 
