@@ -161,19 +161,37 @@ class LoraConfig(LoraConfigBase):
     qa_lora: bool = field(default=False, metadata={"help": "enable qa-lora"})
 
 
+def _optimize_patch(model):
+    from bigdl.llm.transformers.convert import convert_forward
+    import transformers
+    from bigdl.llm.transformers.models.llama import LlamaModel_fast_forward, LlamaDecoderLayer_fast_forward
+    if "llama" in model.config.model_type:
+        convert_forward(
+            model,
+            transformers.models.llama.modeling_llama.LlamaModel,
+            LlamaModel_fast_forward,)
+        convert_forward(
+            model,
+            transformers.models.llama.modeling_llama.LlamaDecoderLayer,
+            LlamaDecoderLayer_fast_forward
+        )
+
+
 def get_peft_model(*args, **kwargs):
     old_create_new_module = LoraModel._create_new_module
     LoraModel._create_new_module = staticmethod(functools.partial(_create_new_module,
                                                                   old_create_new_module))
-
+    # _optimize_patch(args[0])
     try:
         from peft import get_peft_model as get_peft_model_original
         model = get_peft_model_original(*args, **kwargs)
     finally:
         LoraModel._create_new_module = old_create_new_module
-
+    
+    _optimize_patch(model)
     if model.device.type == "xpu":
         cast_lora_weight(model, torch.bfloat16)
+        
         torch.xpu.synchronize()
 
     return model
