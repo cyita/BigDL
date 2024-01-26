@@ -19,6 +19,7 @@
 # /utils.py
 #
 
+import math
 import torch
 import time
 import os
@@ -341,7 +342,7 @@ def speculative_generate(self,
             tic = time.time()
             # Draft model auto-regressively generate k tokens
             # Early stop when prob less then th_stop_draft
-            for step_draft in range(max_step_draft):
+            for step_draft in range(math.ceil(max_step_draft)):
                 if self.config.model_type == "chatglm":
                     past_key_value_len = past_key_values[0][0].shape[0]
                     position_ids = torch.Tensor([[past_key_value_len + step_draft]]).long()
@@ -508,8 +509,12 @@ def speculative_generate(self,
             if hf_adjust:
                 if (max_matched - 1) == max_step_draft:
                     max_step_draft = min(draft_gen_length - 1, max_step_draft + 1)
+                    # print(f"max_step_draft down: {max_step_draft}")
                 else:
-                    max_step_draft = max(1, max_step_draft - 1)
+                    max_step_draft = max(1, max_step_draft - 0.5)
+                    # max_step_draft = max(1, max_step_draft - 1)
+                    # print(f"max_step_draft down: {max_step_draft}, {math.ceil(max_step_draft)}")
+                    # max_step_draft = max_step_draft
 
         # Stop on eos and remove content after eos
         output_ids_list = output_ids[0].tolist()
