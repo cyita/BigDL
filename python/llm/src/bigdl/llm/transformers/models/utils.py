@@ -69,10 +69,12 @@ def use_quantize_kv_cache(linear: torch.nn.Module, x: torch.Tensor) -> bool:
     if os.environ.get("BIGDL_QUANTIZE_KV_CACHE", None) is not None:
         return os.environ["BIGDL_QUANTIZE_KV_CACHE"] == "1"
     else:
-        return x.device.type == 'xpu' and get_xpu_device_type(x) == "mtl" \
+        # return x.device.type == 'xpu' and get_xpu_device_type(x) == "mtl" \
+        #     and hasattr(linear, "qtype") and \
+        #     linear.qtype != ggml_tensor_qtype["fp16"] and linear.qtype != ggml_tensor_qtype["bf16"]
+        return x.device.type == 'xpu' \
             and hasattr(linear, "qtype") and \
             linear.qtype != ggml_tensor_qtype["fp16"] and linear.qtype != ggml_tensor_qtype["bf16"]
-
 
 def init_fp8_kv_cache(batch_size, num_heads, current_length, head_dim, device):
     max_length = current_length + FP8_KV_ALLOC_LENGTH
@@ -97,7 +99,7 @@ def append_fp8_kv_cache(k_cache, v_cache, key, value):
     new_length = cur_length + key.size(2)
     new_size = (batch_size, num_heads, new_length, head_dim)
 
-    if k_cache.stride(1) < new_length * k_cache.size(3):
+    if k_cache.stride(1) < new_length * k_cache.size(3) * k_cache.stride(3):
         new_k_cache, new_v_cache = init_fp8_kv_cache(batch_size, num_heads, new_length,
                                                      head_dim, key.device)
         new_k_cache = new_k_cache.as_strided(new_size, new_k_cache.stride(), storage_offset=0)
@@ -125,6 +127,20 @@ def restore_fp8_kv_cache(k_cache, v_cache, dtype):
     new_v_cache = new_v_cache.view(torch.half)
 
     return new_k_cache.to(dtype=dtype), new_v_cache.to(dtype=dtype)
+
+
+def to_fp8_kv_cache(k_cache, v_cache):
+    # new_k_cache_shape = k_cache.shape
+    # new_v_cache_shape = v_cache.shape
+    # new_k_cache_shape = (new_k_cache_shape[0], new_k_cache_shape[1], new_k_cache_shape[2] + FP8_KV_ALLOC_LENGTH, new_k_cache_shape[3]) 
+    # new_v_cache_shape = (new_v_cache_shape[0], new_v_cache_shape[1], new_v_cache_shape[2] + FP8_KV_ALLOC_LENGTH, new_v_cache_shape[3]) 
+    
+    # new_k_cache = torch.full(k_cache.shape, 0, dtype=torch.uint8, device=k_cache.device)
+    # new_v_cache = torch.full(v_cache.shape, 0, dtype=torch.uint8, device=v_cache.device)
+    new_k_cache = k_cache.half().view(torch.uint8)[:, :, :, 1::2]
+    new_v_cache = v_cache.half().view(torch.uint8)[:, :, :, 1::2]
+    # print(k_cache.shape, new_k_cache_shape, new_k_cache.shape)
+    return new_k_cache, new_v_cache
 
 
 def rotate_half(x):

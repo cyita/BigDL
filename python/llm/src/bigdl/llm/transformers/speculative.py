@@ -496,7 +496,11 @@ def speculative_generate(self,
                                                        past_key_values_storage)
                 original_draft_past_key_values = draft_past_key_values
             else:
-                draft_past_key_values = past_key_values
+                from bigdl.llm.transformers.models.utils import to_fp8_kv_cache
+                # draft_past_key_values = past_key_values
+                draft_past_key_values = [] 
+                for i in range(len(past_key_values)):
+                    draft_past_key_values.append(to_fp8_kv_cache(past_key_values[i][0], past_key_values[i][1]))
             draft_generate_ids[:, 0] = current_input_ids.squeeze()
             tic = time.time()
             # Draft model auto-regressively generate k tokens
@@ -509,6 +513,7 @@ def speculative_generate(self,
             #         delta_attention_mask[i][0] = 0
             draft_attention_mask = attention_mask[:]
             for step_draft in range(max_step_draft):
+                print(f"step: {step}, step_draft: {step_draft}")
                 # if attention_mask is None:
                 #     draft_attention_mask = None
                 # else:
