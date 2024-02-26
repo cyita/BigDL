@@ -58,7 +58,7 @@ def generate(
         for var in ['max_new_tokens', 'max_step_draft', 'th_stop_draft', 'do_sample',
                     'top_k', 'top_p', 'temperature', 'hf_adjust',
                     'auto_th_stop_draft', 'auto_parameters', 'repetition_penalty',
-                    'attention_mask', 'pad_token_id', 'th_batch_num']:
+                    'attention_mask', 'pad_token_id', 'th_batch_num', 'min_step_draft']:
             value = kwargs.pop(var, None)
             if value is not None:
                 new_speculative_kwargs[var] = value
@@ -270,6 +270,7 @@ def speculative_generate(self,
                          draft_model=None,
                          max_new_tokens=10,
                          max_step_draft=8,
+                         min_step_draft=3,
                          th_stop_draft=0.8,
                          auto_th_stop_draft=True,
                          auto_parameters=[1, 0.5, 0.9, 1e-2, 0.9],
@@ -280,6 +281,9 @@ def speculative_generate(self,
                          **sampling_kwargs):
     invalidInputError(draft_model is not None,
                       "Draft model should be provided.")
+    # min_step_draft >= 1. Since the max_step_draft may adjust,
+    # min_step_draft can > max_step_draft
+    min_step_draft = min_step_draft if min_step_draft >= 1 else 1
 
     if generation_config is None:
         generation_config = self.generation_config
@@ -564,7 +568,7 @@ def speculative_generate(self,
                     # if cur_lens[i] >= max_new_tokens:
                     #     delta_attention_mask[i].append(1)
                     #     continue
-                    if (continue_flag[i] == 0) or (draft_output_probs[i].item() < th_stop_draft):
+                    if (continue_flag[i] == 0) or (draft_output_probs[i].item() < th_stop_draft and step_draft + 1 >= min_step_draft):
                         delta_attention_mask[i].append(0)
                         continue_flag[i] = 0
                     else:
