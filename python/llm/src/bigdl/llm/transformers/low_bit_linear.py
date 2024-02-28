@@ -52,6 +52,7 @@ from functools import reduce
 from bigdl.llm.transformers.xpu_customize_fwd import custom_fwd, custom_bwd
 from bigdl.llm.transformers.utils import get_autocast_dtype, get_xpu_device_type, \
     get_ipex_version
+import time
 
 T = TypeVar("T", bound="torch.nn.Module")
 

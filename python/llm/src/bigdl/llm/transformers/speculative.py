@@ -496,11 +496,16 @@ def speculative_generate(self,
                                                        past_key_values_storage)
                 original_draft_past_key_values = draft_past_key_values
             else:
-                from bigdl.llm.transformers.models.utils import to_fp8_kv_cache
-                # draft_past_key_values = past_key_values
-                draft_past_key_values = [] 
-                for i in range(len(past_key_values)):
-                    draft_past_key_values.append(to_fp8_kv_cache(past_key_values[i][0], past_key_values[i][1]))
+                draft_past_key_values = past_key_values
+                # torch.xpu.synchronize()
+                # restore_tic = time.perf_counter()
+                # from bigdl.llm.transformers.models.utils import to_fp8_kv_cache
+                # temp = [] 
+                # for i in range(len(past_key_values)):
+                #     temp.append(to_fp8_kv_cache(past_key_values[i][0], past_key_values[i][1]))
+                # torch.xpu.synchronize()
+                # restore_toc = time.perf_counter()
+                # print(f"fp16 to fp8 kv {(restore_toc - restore_tic) * 1000} ms, kv shape: {past_key_values[0][0].shape}")
             draft_generate_ids[:, 0] = current_input_ids.squeeze()
             tic = time.time()
             # Draft model auto-regressively generate k tokens
@@ -512,8 +517,8 @@ def speculative_generate(self,
             #         continue_flag[i] = 0
             #         delta_attention_mask[i][0] = 0
             draft_attention_mask = attention_mask[:]
+            print(f"step: {step}")
             for step_draft in range(max_step_draft):
-                print(f"step: {step}, step_draft: {step_draft}")
                 # if attention_mask is None:
                 #     draft_attention_mask = None
                 # else:
@@ -569,6 +574,7 @@ def speculative_generate(self,
                 #     break
                 
                 # print("draft_output_probs: ", draft_output_probs)
+
                 for i in range(draft_output_probs.size(0)):
                     # if cur_lens[i] >= max_new_tokens:
                     #     delta_attention_mask[i].append(1)
@@ -667,12 +673,30 @@ def speculative_generate(self,
                     # print(position_ids[:, -drafted_input_ids.size(1):])
                     # print(tokenizer.batch_decode(drafted_input_ids))
                     # print()
+                    # from bigdl.llm.transformers.models.utils import restore_fp8_kv_cache
+                    # if self.device.type == 'xpu':
+                    #     torch.xpu.synchronize()
+                    # restore_tic = time.perf_counter()
+                    # converted_past_key_values = []
+                    # for i in range(len(past_key_values)):
+                    #     converted_past_key_values.append(restore_fp8_kv_cache(past_key_values[i][0],
+                    #                                      past_key_values[i][1],
+                    #                                      drafted_input_ids.dtype))
+                    # restore_toc = time.perf_counter()
+                    # print(f"fp16 restore kv {(restore_toc - restore_tic) * 1000} ms, kv shape: {past_key_values[0][0].shape}")
+                    if self.device.type == 'xpu':
+                        torch.xpu.synchronize()
+                    a = time.perf_counter()
                     output = self(input_ids=drafted_input_ids,
                                   past_key_values=past_key_values,
                                   attention_mask=cur_attention_mask,
                                   position_ids=position_ids[:, -drafted_input_ids.size(1):],
                                   return_dict=True,
                                   use_cache=True)
+                    if self.device.type == 'xpu':
+                        torch.xpu.synchronize()
+                    b = time.perf_counter()
+                    print(f"fp16 verify {(b-a) * 1000}  ms, input id size: {drafted_input_ids.size()}")
             if isinstance(output, dict):
                 logits = output['logits']
                 past_key_values = output['past_key_values']

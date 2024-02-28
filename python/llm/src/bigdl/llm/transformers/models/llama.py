@@ -51,6 +51,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from bigdl.llm.transformers.low_bit_linear import SYM_INT4, FP8E5
 from bigdl.llm.ggml.quantize import ggml_tensor_qtype
 from bigdl.llm.utils.common import invalidInputError
+import time
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -292,6 +293,9 @@ def llama_attention_forward_4_31_quantized(
     use_fuse_rope = should_use_fuse_rope(self, hidden_states, position_ids)
     enough_kv_room = is_enough_kv_cache_room_4_31(past_key_value, seq_len=q_len)
     qtype = getattr(self.q_proj, "qtype", None)
+
+    use_fp16_linear = (qtype == ggml_tensor_qtype["fp16"])
+
     qtype_check = qtype in [SYM_INT4, FP8E5]
     no_tp = not self.config.pretraining_tp > 1
     decoding_fast_path = (no_tp and qtype_check and use_fuse_rope
@@ -323,9 +327,53 @@ def llama_attention_forward_4_31_quantized(
                                                                          0,
                                                                          self.head_dim)
     else:
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        if use_fp16_linear:
+            torch.xpu.synchronize()
+            a = time.perf_counter()
+        if fp16_fusion_check(self.q_proj, hidden_states, self.training) and \
+                    hidden_size == 4096:
+            # only use mm_qkv_out on pvc for llama-7b
+            if not hasattr(self, "qkv_proj_weight"):
+                self.qkv_proj_weight = torch.stack([self.q_proj.weight,
+                                                    self.k_proj.weight,
+                                                    self.v_proj.weight]).contiguous()
+                self.q_proj.weight.data = self.qkv_proj_weight[0, :, :]
+                self.k_proj.weight.data = self.qkv_proj_weight[1, :, :]
+                self.v_proj.weight.data = self.qkv_proj_weight[2, :, :]
+                torch.xpu.empty_cache()
+            query_states = torch.empty(bsz, q_len, hidden_size, dtype=hidden_states.dtype,
+                                        device=hidden_states.device)
+            key_states = torch.empty(bsz, q_len, hidden_size, dtype=hidden_states.dtype,
+                                        device=hidden_states.device)
+            value_states = torch.empty(bsz, q_len, hidden_size, dtype=hidden_states.dtype,
+                                        device=hidden_states.device)
+            torch.ops.torch_ipex.mm_qkv_out(
+                hidden_states, self.qkv_proj_weight, None,
+                query_states, key_states, value_states
+            )
+        else:
+            if should_use_mm_int4_qkv(self, device):
+                if not hasattr(self, "qkv_proj_qweight"):
+                    self.qkv_proj_qweight = fuse_qkv_weight(self.q_proj,
+                                                            self.k_proj,
+                                                            self.v_proj)
+                import linear_q4_0
+                qkv_states = linear_q4_0.mm_int4(hidden_states, self.qkv_proj_qweight)
+                query_states = qkv_states[:, :, :hidden_size]
+                key_states = qkv_states[:, :, hidden_size:2*hidden_size]
+                value_states = qkv_states[:, :, 2*hidden_size:]
+                # import linear_q4_0
+                # query_states, key_states, value_states = linear_q4_0.mm_qkv_int4(
+                #     hidden_states, self.q_proj.weight, self.k_proj.weight, self.v_proj.weight
+                # )
+            else:
+                query_states = self.q_proj(hidden_states)
+                key_states = self.k_proj(hidden_states)
+                value_states = self.v_proj(hidden_states)
+        if use_fp16_linear:
+            torch.xpu.synchronize()
+            b = time.perf_counter()
+            print(f"fp16 qkv time {(b - a) * 1000} ms")
 
         query_states = query_states.view(bsz, q_len,
                                          self.num_heads, self.head_dim).transpose(1, 2)
@@ -360,6 +408,8 @@ def llama_attention_forward_4_31_quantized(
     # otherwise, use native attention
     kv_seq_len = key_states.shape[-2]
     if past_key_value is None:
+        if use_fp16_linear:
+            print(f"fp16 past_key_value None")
         attn_weights = torch.matmul(query_states,
                                     key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
@@ -425,6 +475,7 @@ def llama_attention_forward_4_31_quantized(
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 invalidInputError(
+                    False,
                     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)},"
                     f" but is {attention_mask.size()}"
                 )
@@ -441,6 +492,10 @@ def llama_attention_forward_4_31_quantized(
             attn_output = linear_q4_0.attn_value_fp8_matmul(attn_weights,
                                                             value_states.transpose(-1, -2))
 
+        torch.xpu.synchronize()
+        b = time.perf_counter()
+        if use_fp16_linear:
+            print(f"fp16 torch matmul {(b - a1) * 1000} ms, query_states size {query_states.size()}")
     attn_output_size = (bsz, self.num_heads, q_len, self.head_dim)
     if attn_output.size() != attn_output_size:
         invalidInputError(False,
@@ -484,6 +539,9 @@ def llama_attention_forward_4_31_original(
     use_fuse_rope = should_use_fuse_rope(self, hidden_states, position_ids)
     enough_kv_room = is_enough_kv_cache_room_4_31(past_key_value, seq_len=q_len)
     qtype = getattr(self.q_proj, "qtype", None)
+
+    use_fp16_linear = (qtype == ggml_tensor_qtype["fp16"])
+    
     qtype_check = qtype in [SYM_INT4, FP8E5]
     no_tp = not self.config.pretraining_tp > 1
     decoding_fast_path = (no_tp and qtype_check and use_fuse_rope and
@@ -532,6 +590,9 @@ def llama_attention_forward_4_31_original(
                             for i in range(self.config.pretraining_tp)]
             value_states = torch.cat(value_states, dim=-1)
         else:
+            if use_fp16_linear:
+                torch.xpu.synchronize()
+                a = time.perf_counter()
             if fp16_fusion_check(self.q_proj, hidden_states, self.training) and \
                     hidden_size == 4096:
                 # only use mm_qkv_out on pvc for llama-7b
@@ -572,6 +633,10 @@ def llama_attention_forward_4_31_original(
                     query_states = self.q_proj(hidden_states)
                     key_states = self.k_proj(hidden_states)
                     value_states = self.v_proj(hidden_states)
+            if use_fp16_linear:
+                torch.xpu.synchronize()
+                b = time.perf_counter()
+                print(f"fp16 qkv time {(b - a) * 1000} ms")
 
         query_states = query_states.view(bsz, q_len,
                                          self.num_heads, self.head_dim).transpose(1, 2)
@@ -648,12 +713,16 @@ def llama_attention_forward_4_31_original(
                                                                          dtype=attention_dtype)
 
     if fsdp_flag:
+        if use_fp16_linear:
+            print("fp16 flash attn")
         attn_output = F.scaled_dot_product_attention(query_states.to(dtype=attention_dtype),
                                                      key_states,
                                                      value_states,
                                                      is_causal=True)
         attn_weights = None
     elif use_esimd_sdp(q_len, key_states.shape[2], self.head_dim, query_states):
+        if use_fp16_linear:
+            print("fp16 esimd_sdp")
         import linear_fp16_esimd
         attn_output = linear_fp16_esimd.sdp_forward(query_states,
                                                     key_states,
@@ -661,11 +730,17 @@ def llama_attention_forward_4_31_original(
         attn_output = attn_output.view(query_states.shape)
         attn_weights = None
     else:
+        torch.xpu.synchronize()
+        a = time.perf_counter()
         # otherwise, use native attention
         attn_output, attn_weights = native_sdp(query_states, key_states, value_states,
                                                attention_mask,
                                                bsz, q_len, kv_seq_len,
                                                self.head_dim, self.num_heads)
+        torch.xpu.synchronize()
+        b = time.perf_counter()
+        if use_fp16_linear:
+            print(f"fp16 native {(b-a) * 1000} ms")
 
     attn_output_size = (bsz, self.num_heads, q_len, self.head_dim)
     if attn_output.size() != attn_output_size:
