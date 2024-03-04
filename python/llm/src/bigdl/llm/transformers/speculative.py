@@ -261,6 +261,33 @@ def _update_past_key_values_storage_cpu(self, past_key_values, past_key_values_s
                 delta_past_value.to(torch.float32)
 
 
+def _check_and_extend_kv_cache(past_key_values, max_step_draft, kv_alloc_block_len=256):
+    from bigdl.llm.transformers.models.utils import is_enough_kv_cache_room_4_31, \
+        extend_kv_cache
+    enough_kv_room = is_enough_kv_cache_room_4_31(past_key_value=past_key_values[0],
+                                                  seq_len=max_step_draft)
+    device = past_key_values[0][0].device
+    if not enough_kv_room:
+        print("extending....")
+        past_key_values = list(past_key_values)
+        bsz, num_heads, current_seq_len, head_dim = past_key_values[0][0].shape
+        for i in range(len(past_key_values)):
+            cache_k = past_key_values[i][0]
+            new_cache_k, new_cache_v = extend_kv_cache(
+                    bsz,
+                    num_heads,  # Support GQA
+                    head_dim,
+                    cache_k.size(2),
+                    current_seq_len + max_step_draft + kv_alloc_block_len,
+                    dtype=cache_k.dtype,
+                    device=device
+                )
+            new_cache_k[:] = cache_k
+            new_cache_v[:] = past_key_values[i][1]
+            past_key_values[i] = (new_cache_k, new_cache_v)
+    return past_key_values, not enough_kv_room
+
+
 def _fill_with_pad_token(cur_tensor, pad_token_id, mask):
     tmp_tensor = torch.full_like(cur_tensor, pad_token_id)
     res_tensor = torch.where(mask == 0, tmp_tensor, cur_tensor)
@@ -500,6 +527,9 @@ def speculative_generate(self,
                                                        past_key_values_storage)
                 original_draft_past_key_values = draft_past_key_values
             else:
+                past_key_values, extend_kv = _check_and_extend_kv_cache(past_key_values,
+                                                                        max_step_draft,
+                                                                        max_new_tokens - min(cur_lens) + 40)
                 draft_past_key_values = past_key_values
                 # torch.xpu.synchronize()
                 # restore_tic = time.perf_counter()
@@ -559,10 +589,6 @@ def speculative_generate(self,
                     top_p=generation_config.top_p,
                     temperature=generation_config.temperature)
 
-                if self.device.type == "xpu":
-                    torch.xpu.synchronize()
-                    draft_memory_every_token.append(torch.xpu.memory.memory_reserved() / (1024**3))
-                
                 cur_draft_mask = torch.tensor(continue_flag, device=self.device).unsqueeze(1)
                 draft_output_ids = _fill_with_pad_token(draft_output_ids, pad_token_id, cur_draft_mask)
                 draft_output_probs = _fill_with_pad_token(draft_output_probs, 0, cur_draft_mask)
@@ -681,30 +707,12 @@ def speculative_generate(self,
                     # print(position_ids[:, -drafted_input_ids.size(1):])
                     # print(tokenizer.batch_decode(drafted_input_ids))
                     # print()
-                    # from bigdl.llm.transformers.models.utils import restore_fp8_kv_cache
-                    # if self.device.type == 'xpu':
-                    #     torch.xpu.synchronize()
-                    # restore_tic = time.perf_counter()
-                    # converted_past_key_values = []
-                    # for i in range(len(past_key_values)):
-                    #     converted_past_key_values.append(restore_fp8_kv_cache(past_key_values[i][0],
-                    #                                      past_key_values[i][1],
-                    #                                      drafted_input_ids.dtype))
-                    # restore_toc = time.perf_counter()
-                    # print(f"fp16 restore kv {(restore_toc - restore_tic) * 1000} ms, kv shape: {past_key_values[0][0].shape}")
-                    if self.device.type == 'xpu':
-                        torch.xpu.synchronize()
-                    a = time.perf_counter()
                     output = self(input_ids=drafted_input_ids,
                                   past_key_values=past_key_values,
                                   attention_mask=cur_attention_mask,
                                   position_ids=position_ids[:, -drafted_input_ids.size(1):],
                                   return_dict=True,
                                   use_cache=True)
-                    if self.device.type == 'xpu':
-                        torch.xpu.synchronize()
-                    b = time.perf_counter()
-                    print(f"fp16 verify {(b-a) * 1000}  ms, input id size: {drafted_input_ids.size()}")
             if isinstance(output, dict):
                 logits = output['logits']
                 past_key_values = output['past_key_values']
@@ -718,7 +726,10 @@ def speculative_generate(self,
                                 temperature=generation_config.temperature)
             if self.device.type == 'xpu':
                 torch.xpu.synchronize()
-                verify_memory_every_token.append(torch.xpu.memory.memory_reserved() / (1024**3))
+                # print(f"verify memory: {torch.xpu.memory.memory_reserved() / (1024**3)}")
+                if extend_kv:
+                    torch.xpu.empty_cache()
+                print(f"verify memory: {torch.xpu.memory.memory_reserved() / (1024**3)}")
             toc = time.time()
             self.verify_time.append(toc - tic)
             self.generate_time.append(self.draft_time[-1] + self.verify_time[-1])
@@ -823,16 +834,6 @@ def speculative_generate(self,
     # self.n_token_generated = sum(cur_lens)
     self.e2e_time_without_first = e2e_toc - e2e_tic
 
-    if self.device.type == 'xpu':
-        import numpy as np
-        print(f"draft_memory_every_token: {draft_memory_every_token}")
-        print(f"verify_memory_every_token: {verify_memory_every_token}")
-        draft_peak = np.max(draft_memory_every_token)
-        verify_peak = np.max(verify_memory_every_token)
-        self.peak_memory = draft_peak if draft_peak > verify_peak else verify_peak
-        print(f"current memory: {torch.xpu.memory.memory_reserved() / (1024**3)}")
-        torch.xpu.empty_cache()
-
     result = []
 
     for row in generate_ids:
@@ -844,5 +845,7 @@ def speculative_generate(self,
     result_tensor = torch.stack(result)
 
     generate_ids = torch.cat([input_ids, result_tensor], dim=-1)
+
+    # torch.xpu.empty_cache()
 
     return generate_ids
