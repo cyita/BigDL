@@ -21,12 +21,13 @@ IPEX-LLM's support for `llama.cpp` now is available for Linux system and Windows
 #### Linux
 For Linux system, we recommend Ubuntu 20.04 or later (Ubuntu 22.04 is preferred).
 
-Visit the [Install IPEX-LLM on Linux with Intel GPU](https://ipex-llm.readthedocs.io/en/latest/doc/LLM/Quickstart/install_linux_gpu.html), follow [Install Intel GPU Driver](https://ipex-llm.readthedocs.io/en/latest/doc/LLM/Quickstart/install_linux_gpu.html#install-intel-gpu-driver) and [Install oneAPI](https://ipex-llm.readthedocs.io/en/latest/doc/LLM/Quickstart/install_linux_gpu.html#install-oneapi) to install GPU driver and Intel® oneAPI Base Toolkit 2024.0.
+Visit the [Install IPEX-LLM on Linux with Intel GPU](./install_linux_gpu.html), follow [Install Intel GPU Driver](./install_linux_gpu.html#install-intel-gpu-driver) and [Install oneAPI](./install_linux_gpu.html#install-oneapi) to install GPU driver and Intel® oneAPI Base Toolkit 2024.0.
 
-#### Windows
-Visit the [Install IPEX-LLM on Windows with Intel GPU Guide](https://ipex-llm.readthedocs.io/en/latest/doc/LLM/Quickstart/install_windows_gpu.html), and follow [Install Prerequisites](https://ipex-llm.readthedocs.io/en/latest/doc/LLM/Quickstart/install_windows_gpu.html#install-prerequisites) to install [Visual Studio 2022](https://visualstudio.microsoft.com/downloads/) Community Edition and latest [GPU driver](https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html).
+#### Windows (Optional)
 
-**Note**: IPEX-LLM backend only supports the more recent GPU drivers. Please make sure your GPU driver version is equal or newer than `31.0.101.5333`, otherwise you might find gibberish output.
+IPEX-LLM backend for llama.cpp only supports the more recent GPU drivers. Please make sure your GPU driver version is equal or newer than `31.0.101.5333`, otherwise you might find gibberish output. 
+
+If you have lower GPU driver version, visit the [Install IPEX-LLM on Windows with Intel GPU Guide](./install_windows_gpu.html), and follow [Update GPU driver](./install_windows_gpu.html#optional-update-gpu-driver).
 
 ### 1 Install IPEX-LLM for llama.cpp
 
@@ -46,13 +47,12 @@ To use `llama.cpp` with IPEX-LLM, first ensure that `ipex-llm[cpp]` is installed
 
       .. note::
 
-      for Windows, we use pip to install oneAPI.
+      Please run the following command in Anaconda Prompt.
 
       .. code-block:: cmd
 
          conda create -n llm-cpp python=3.11
          conda activate llm-cpp
-         pip install dpcpp-cpp-rt==2024.0.2 mkl-dpcpp==2024.0.0 onednn==2024.0.0 # install oneapi
          pip install --pre --upgrade ipex-llm[cpp]
 
 ```
@@ -102,6 +102,12 @@ Then you can use following command to initialize `llama.cpp` with IPEX-LLM:
    ``init-llama-cpp`` will create soft links of llama.cpp's executable files to current directory, if you want to use these executable files in other places, don't forget to run above commands again.
 ```
 
+```eval_rst
+.. note::
+
+   If you have installed higher version ``ipex-llm[cpp]`` and want to upgrade your binary file, don't forget to remove old binary files first and initialize again with ``init-llama-cpp`` or ``init-llama-cpp.bat``.
+```
+
 **Now you can use these executable files by standard llama.cpp's usage.**
 
 #### Runtime Configuration
@@ -118,7 +124,9 @@ To use GPU acceleration, several environment variables are required or recommend
          export SYCL_CACHE_PERSISTENT=1
 
    .. tab:: Windows
-   
+
+      Please run the following command in Anaconda Prompt.
+
       .. code-block:: bash
 
          set SYCL_CACHE_PERSISTENT=1
@@ -158,6 +166,8 @@ Before running, you should download or copy community GGUF model to your current
       For more details about meaning of each parameter, you can use ``./main -h``.
 
    .. tab:: Windows
+
+      Please run the following command in Anaconda Prompt.
 
       .. code-block:: bash
 
@@ -309,12 +319,6 @@ If your program hang after `llm_load_tensors:  SYCL_Host buffer size =    xx.xx 
 `-ngl` means the number of layers to store in VRAM. If your VRAM is enough, we recommend putting all layers on GPU, you can just set `-ngl` to a large number like 999 to achieve this goal.
 
 If `-ngl` is set to 0, it means that the entire model will run on CPU. If `-ngl` is set to greater than 0 and less than model layers, then it's mixed GPU + CPU scenario.
-
-```eval_rst
-.. note::
-
-  Now Q4_0 /Q4_1 /Q8_0 precisons are not allowed to run on CPU or run with mixed CPU and GPU.
-```
 
 #### How to specificy GPU
 If your machine has multi GPUs, `llama.cpp` will default use all GPUs which may slow down your inference for model which can run on single GPU. You can add `-sm none` in your command to use one GPU only.
