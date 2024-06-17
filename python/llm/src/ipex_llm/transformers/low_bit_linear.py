@@ -692,6 +692,9 @@ class LowBitLinear(nn.Linear):
         x0 = self.weight.data
 
         if x0.device.type == "xpu":
+            if self.qtype == Q6_K:
+                print("Q6_k")
+
             # GPU logic
             try:
                 import intel_extension_for_pytorch
