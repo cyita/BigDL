@@ -153,7 +153,7 @@ def compress_kv(attn_config, key_states, query_states, value_states, attention_m
         attn_config.pooling = 'maxpool'
     bsz, num_heads, q_len, head_dim = query_states.shape
     if q_len <= attn_config.max_capacity_prompt:
-        return key_states, value_states
+        return key_states, value_states, None, None
     else:
         sliding_window_size = getattr(attn_config, "sliding_window", None)
         if sliding_window_size is not None and sliding_window_size <= 2500:
@@ -202,16 +202,22 @@ def compress_kv(attn_config, key_states, query_states, value_states, attention_m
                 invalidInputError(False, 'Pooling method not supported')
             indices = attn_cache.topk(attn_config.max_capacity_prompt - attn_config.window_size,
                                       dim=-1).indices
+            residual_indices = indices[:, 0, :].unsqueeze(-1).expand(-1, -1, attn_config.hidden_size)
             indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+            query_indices = repeat_kv(indices, num_key_value_groups)
             k_past_compress = key_states[:, :, :-attn_config.window_size, :]\
                 .gather(dim=2, index=indices)
             v_past_compress = value_states[:, :, :-attn_config.window_size, :]\
                 .gather(dim=2, index=indices)
+            p_past_compress = query_states[:, :, :-attn_config.window_size, :]\
+                .gather(dim=2, index=query_indices)
             k_cur = key_states[:, :, -attn_config.window_size:, :]
             v_cur = value_states[:, :, -attn_config.window_size:, :]
+            q_cur = query_states[:, :, -attn_config.window_size:, :]
             key_states = torch.cat([k_past_compress, k_cur], dim=2)
             value_states = torch.cat([v_past_compress, v_cur], dim=2)
-            return key_states, value_states
+            new_query_states = torch.cat([p_past_compress, q_cur], dim=2)
+            return key_states, value_states, new_query_states, residual_indices
 
 
 class DynamicCompressCache(DynamicCache):
@@ -257,7 +263,7 @@ class DynamicCompressCache(DynamicCache):
         # Update the cache
         if len(self.key_cache) <= layer_idx:
             # First token, compress kv cache
-            key_states_compress, value_states_compress = compress_kv(
+            key_states_compress, value_states_compress, query_states_compress, query_indices = compress_kv(
                 attn_config=attn_config,
                 key_states=key_states,
                 query_states=query_states,
@@ -276,17 +282,18 @@ class DynamicCompressCache(DynamicCache):
             self.key_cache.append(k_cache_compressed)
             self.value_cache.append(v_cache_compressed)
 
-            if key_states.stride(2) != head_dim:
-                k_cache, v_cache = init_kv_cache(
-                    bsz, num_heads, head_dim,
-                    0, key_states.size(2),
-                    key_states.dtype, key_states.device
-                )
-                k_cache, v_cache = append_kv_cache(k_cache, v_cache,
-                                                   key_states, value_states)
-                return k_cache, v_cache
-            else:
-                return key_states, value_states
+            # if key_states.stride(2) != head_dim:
+            #     k_cache, v_cache = init_kv_cache(
+            #         bsz, num_heads, head_dim,
+            #         0, key_states.size(2),
+            #         key_states.dtype, key_states.device
+            #     )
+            #     k_cache, v_cache = append_kv_cache(k_cache, v_cache,
+            #                                        key_states, value_states)
+            #     return k_cache, v_cache
+            # else:
+            #     return key_states, value_states
+            return k_cache_compressed, v_cache_compressed, query_states_compress, query_indices
         else:
             cache_k = self.key_cache[layer_idx]
             cache_v = self.value_cache[layer_idx]
@@ -315,7 +322,7 @@ class DynamicCompressCache(DynamicCache):
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
 
-            return self.key_cache[layer_idx], self.value_cache[layer_idx]
+            return self.key_cache[layer_idx], self.value_cache[layer_idx], None, None
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer
