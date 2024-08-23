@@ -570,18 +570,17 @@ def qwen2_attention_forward(
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states,
                                                         cos, sin, position_ids)
 
-    query_idx = None
     if past_key_value is not None:
         # [CompressKV]
         if use_compresskv:
             enough_kv_room = is_enough_kv_cache_room_4_36(past_key_value, self.layer_idx,
                                                           q_len)
-            key_states, value_states, new_query_states, query_idx = past_key_value.update(
+            key_states, value_states, new_query_states = past_key_value.update(
                 key_states, value_states, self.layer_idx,
                 query_states, attention_mask, self.num_key_value_groups,
                 self.config, enough_kv_room, 256)
-            if new_query_states is not None:
-                query_states = new_query_states
+            # if new_query_states is not None:
+            #     query_states = new_query_states
         else:
             key_states, value_states = past_key_value.update(key_states, value_states,
                                                              self.layer_idx, None)
@@ -650,8 +649,7 @@ def qwen2_attention_forward(
     attn_output = self.o_proj(attn_output)
 
     if not output_attentions:
-        # attn_weights = None
-        attn_weights = query_idx
+        attn_weights = None
 
     return attn_output, attn_weights, past_key_value
 

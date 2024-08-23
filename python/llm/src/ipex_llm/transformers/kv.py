@@ -202,7 +202,25 @@ def compress_kv(attn_config, key_states, query_states, value_states, attention_m
                 invalidInputError(False, 'Pooling method not supported')
             indices = attn_cache.topk(attn_config.max_capacity_prompt - attn_config.window_size,
                                       dim=-1).indices
-            residual_indices = indices[:, 0, :].unsqueeze(-1).expand(-1, -1, attn_config.hidden_size)
+            mask_cond = torch.arange(q_len, device=indices.device)
+            causal_mask_cond = (mask_cond < (mask_cond + 1).view(q_len, 1))
+            mask_list = []
+            for j in range(indices.size(1)):
+                mask2 = torch.isin(mask_cond, indices[:,j])
+                mask4 = ~mask2
+                mask5 = mask4.unsqueeze(0) * mask4.unsqueeze(1)
+                mask7 = torch.logical_and(mask5, causal_mask_cond)
+                mask_list.append(mask7)
+
+            final_mask = torch.full((1, indices.shape[1], q_len, q_len),
+                                    torch.finfo(torch.float16).min,
+                                    device=indices.device)
+            final_mask_cond = torch.stack(mask_list, dim=0).unsqueeze(0)
+            final_mask.masked_fill_(final_mask_cond, 0)
+
+            max_ele = torch.max(indices)
+
+            # torch.save(indices, "/home/arda/yina/BigDL/python/yina/indices.pt")
             indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
             query_indices = repeat_kv(indices, num_key_value_groups)
             k_past_compress = key_states[:, :, :-attn_config.window_size, :]\
@@ -217,7 +235,7 @@ def compress_kv(attn_config, key_states, query_states, value_states, attention_m
             key_states = torch.cat([k_past_compress, k_cur], dim=2)
             value_states = torch.cat([v_past_compress, v_cur], dim=2)
             new_query_states = torch.cat([p_past_compress, q_cur], dim=2)
-            return key_states, value_states, new_query_states, residual_indices
+            return key_states, value_states, new_query_states
 
 
 class DynamicCompressCache(DynamicCache):
@@ -263,7 +281,7 @@ class DynamicCompressCache(DynamicCache):
         # Update the cache
         if len(self.key_cache) <= layer_idx:
             # First token, compress kv cache
-            key_states_compress, value_states_compress, query_states_compress, query_indices = compress_kv(
+            key_states_compress, value_states_compress, query_states_compress = compress_kv(
                 attn_config=attn_config,
                 key_states=key_states,
                 query_states=query_states,
@@ -293,7 +311,7 @@ class DynamicCompressCache(DynamicCache):
             #     return k_cache, v_cache
             # else:
             #     return key_states, value_states
-            return k_cache_compressed, v_cache_compressed, query_states_compress, query_indices
+            return k_cache_compressed, v_cache_compressed, query_states_compress
         else:
             cache_k = self.key_cache[layer_idx]
             cache_v = self.value_cache[layer_idx]
@@ -322,7 +340,7 @@ class DynamicCompressCache(DynamicCache):
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
 
-            return self.key_cache[layer_idx], self.value_cache[layer_idx], None, None
+            return self.key_cache[layer_idx], self.value_cache[layer_idx], None
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
         """Returns the sequence length of the cached states. A layer
