@@ -202,40 +202,57 @@ def compress_kv(attn_config, key_states, query_states, value_states, attention_m
                 invalidInputError(False, 'Pooling method not supported')
             indices = attn_cache.topk(attn_config.max_capacity_prompt - attn_config.window_size,
                                       dim=-1).indices
+            
+            final_mask = None
+            # # prefill mask
+            append_tensor = torch.tensor(range(q_len- 32, q_len), device=indices.device).view(1, 1, -1)
+            append_tensor_repeated = append_tensor.repeat(1, indices.size(1), 1)
+            full_indices = torch.cat((indices, append_tensor_repeated), dim=2)
             mask_cond = torch.arange(q_len, device=indices.device)
             causal_mask_cond = (mask_cond < (mask_cond + 1).view(q_len, 1))
-            mask_list = []
-            for j in range(indices.size(1)):
-                mask2 = torch.isin(mask_cond, indices[:,j])
-                mask4 = ~mask2
-                mask5 = mask4.unsqueeze(0) * mask4.unsqueeze(1)
-                mask7 = torch.logical_and(mask5, causal_mask_cond)
-                mask_list.append(mask7)
+            final_mask_causal_cond = causal_mask_cond.unsqueeze(0).repeat(indices.size(1), 1, 1)
+            final_mask_cond_list = []
+            for j in range(full_indices.size(1)):
+                final_mask_cond_list.append(torch.isin(mask_cond, full_indices[:,j]))
+            final_mask_cond = torch.stack(final_mask_cond_list, dim=0)
+            final_mask_cond = final_mask_cond.unsqueeze(1).repeat(1, q_len, 1)
+            final_mask_cond = torch.logical_and(final_mask_cond, final_mask_causal_cond)
 
-            final_mask = torch.full((1, indices.shape[1], q_len, q_len),
+            for j in range(full_indices.size(1)):
+                sorted_tensor, index = torch.sort(full_indices[:,j])
+                sorted_list = sorted_tensor[0].tolist()
+
+                remain_list = []
+                for i in range(q_len):
+                    this_mask = final_mask_cond[j][i, i].item()
+                    sum_final = (final_mask_cond[j][i, :] == True).sum().item()
+                    if not this_mask:
+                        assert i not in full_indices[:,j]
+                        assert sum_final == len(remain_list)
+                    else:
+                        remain_list.append(i)
+                        assert i in full_indices[:,j]
+                        assert sum_final == len(remain_list)
+
+                assert sorted_list == remain_list
+
+            final_mask = torch.full((1, full_indices.shape[1], q_len, q_len),
                                     torch.finfo(torch.float16).min,
-                                    device=indices.device)
-            final_mask_cond = torch.stack(mask_list, dim=0).unsqueeze(0)
+                                    device=full_indices.device)
             final_mask.masked_fill_(final_mask_cond, 0)
-
-            max_ele = torch.max(indices)
+            final_mask = repeat_kv(final_mask, num_key_value_groups)
 
             # torch.save(indices, "/home/arda/yina/BigDL/python/yina/indices.pt")
             indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
-            query_indices = repeat_kv(indices, num_key_value_groups)
             k_past_compress = key_states[:, :, :-attn_config.window_size, :]\
                 .gather(dim=2, index=indices)
             v_past_compress = value_states[:, :, :-attn_config.window_size, :]\
                 .gather(dim=2, index=indices)
-            p_past_compress = query_states[:, :, :-attn_config.window_size, :]\
-                .gather(dim=2, index=query_indices)
             k_cur = key_states[:, :, -attn_config.window_size:, :]
             v_cur = value_states[:, :, -attn_config.window_size:, :]
-            q_cur = query_states[:, :, -attn_config.window_size:, :]
             key_states = torch.cat([k_past_compress, k_cur], dim=2)
             value_states = torch.cat([v_past_compress, v_cur], dim=2)
-            new_query_states = torch.cat([p_past_compress, q_cur], dim=2)
-            return key_states, value_states, new_query_states
+            return key_states, value_states, final_mask
 
 
 class DynamicCompressCache(DynamicCache):
@@ -281,7 +298,7 @@ class DynamicCompressCache(DynamicCache):
         # Update the cache
         if len(self.key_cache) <= layer_idx:
             # First token, compress kv cache
-            key_states_compress, value_states_compress, query_states_compress = compress_kv(
+            key_states_compress, value_states_compress, attn_mask = compress_kv(
                 attn_config=attn_config,
                 key_states=key_states,
                 query_states=query_states,
@@ -300,18 +317,17 @@ class DynamicCompressCache(DynamicCache):
             self.key_cache.append(k_cache_compressed)
             self.value_cache.append(v_cache_compressed)
 
-            # if key_states.stride(2) != head_dim:
-            #     k_cache, v_cache = init_kv_cache(
-            #         bsz, num_heads, head_dim,
-            #         0, key_states.size(2),
-            #         key_states.dtype, key_states.device
-            #     )
-            #     k_cache, v_cache = append_kv_cache(k_cache, v_cache,
-            #                                        key_states, value_states)
-            #     return k_cache, v_cache
-            # else:
-            #     return key_states, value_states
-            return k_cache_compressed, v_cache_compressed, query_states_compress
+            if key_states.stride(2) != head_dim:
+                k_cache, v_cache = init_kv_cache(
+                    bsz, num_heads, head_dim,
+                    0, key_states.size(2),
+                    key_states.dtype, key_states.device
+                )
+                k_cache, v_cache = append_kv_cache(k_cache, v_cache,
+                                                   key_states, value_states)
+                return k_cache, v_cache, attn_mask
+            else:
+                return key_states, value_states, attn_mask
         else:
             cache_k = self.key_cache[layer_idx]
             cache_v = self.value_cache[layer_idx]
