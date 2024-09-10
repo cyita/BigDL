@@ -95,6 +95,7 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
         rms_norm_eps,
         intermediate_size,
         is_groupwise_quant,
+        scales = None,
     ):
         super().__init__(max_seq_len=max_seq_len,
                          transpose_value=transpose_value,
@@ -213,6 +214,7 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
                 v_bias=v_biases[i],
                 past_key=past_keys[i],
                 past_value=past_values[i],
+                scale=scales[i * 7: (i + 1) * 7] if scales is not None else None,
             )
             curr_key_values.append((new_key_states, new_value_states))
 
@@ -226,13 +228,16 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
         print(f"{mode} start compiling")
         self.compile()
         print(f"{mode} end compiling")
+        xml_path = "qwen2-npu-gw-constscale-" + mode + "-" + str(num_layers) + ".xml"
+        if not os.path.exists(xml_path):
+            self.save(xml_path)
 
-    def mlp(self, hidden_states, seq_len):
+    def mlp(self, hidden_states, seq_len, scales=None):
         mm1 = self.linear(
-            hidden_states, self.intermediate_size, self.hidden_size, bias=False, wt_dtype=self.dtype
+            hidden_states, self.intermediate_size, self.hidden_size, bias=False, wt_dtype=self.dtype, scale=scales[0]
         )
         mm2 = self.linear(
-            hidden_states, self.intermediate_size, self.hidden_size, bias=False, wt_dtype=self.dtype
+            hidden_states, self.intermediate_size, self.hidden_size, bias=False, wt_dtype=self.dtype, scale=scales[1]
         )  # type: ignore[attr-defined]
         mm1 = self.eltwise_mul(self.swish(mm1), mm2)  # type: ignore[attr-defined]
         if self.intermediate_size == 18944:
@@ -246,7 +251,7 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
             hidden_states = hidden_states_0 + hidden_states_1
         else:
             hidden_states = self.linear(
-                mm1, self.hidden_size, self.intermediate_size, bias=False, wt_dtype=self.dtype
+                mm1, self.hidden_size, self.intermediate_size, bias=False, wt_dtype=self.dtype, scale=scales[2]
             )
         return hidden_states
 
@@ -262,8 +267,11 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
         v_bias,
         past_key=None,
         past_value=None,
+        scale=None
     ):
-
+        print(f"build_decoder, {len(scale)}")
+        for s in scale:
+            print(s.shape)
         residual = hidden_states
         input_2d = self.reshape(hidden_states, (self.batch_size * self.seq_len, self.hidden_size))
         input_2d = self.layer_norm(input_2d, input_layernorm_weight)
@@ -283,11 +291,12 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
             q_bias=q_bias,
             k_bias=k_bias,
             v_bias=v_bias,
+            scales=scale[:4] if scale is not None else None
         )
         hidden_states = self.eltwise_add(residual, attn_output)
         residual = hidden_states
         hidden_states = self.layer_norm(hidden_states, post_attention_layernorm_weight)
-        hidden_states = self.mlp(hidden_states, self.seq_len)
+        hidden_states = self.mlp(hidden_states, self.seq_len, scale[4:] if scale is not None else None)
         hidden_states = self.eltwise_add(residual, hidden_states)
         hidden_states = self.convert_to_fp16(hidden_states)
 
@@ -322,9 +331,12 @@ class FusedQwenLowBitMultiDecoderlayer(torch.nn.Module):
         self.do_print = do_print
 
         op_parameters = []
+        scale_constants = []
         for w in parameters:
             if isinstance(w, tuple):  # from QuantizedLinear
-                op_parameters.append((w[0].numpy(), w[1].numpy()))
+                # op_parameters.append((w[0].numpy(), w[1].numpy()))
+                op_parameters.append(w[0].numpy())
+                scale_constants.append(w[1].numpy())
             else:
                 op_parameters.append(w.to(torch.float16).numpy())
         self.op_parameters = op_parameters
@@ -349,10 +361,14 @@ class FusedQwenLowBitMultiDecoderlayer(torch.nn.Module):
 
         self.backend_decoders = []
 
+        # print(f"scale_constants len : {len(scale_constants)}")
+
         for i in range(intra_stages):
             start, end = self.layer_ranges[i]
             lm_0 = input_laynorm_weights[start:end]
             lm_1 = post_attn_layernorm_weights[start:end]
+            scales = scale_constants[start * 7:end * 7]
+            print(f"intra stage {i}, scale len: {len(scales)}")
             decoder = LowBitQwenMultiDecoderlayer(
                 [1, 1, num_heads * head_dim],
                 input_layernorm_weights=lm_0,
@@ -371,7 +387,8 @@ class FusedQwenLowBitMultiDecoderlayer(torch.nn.Module):
                 mode="decode",
                 transpose_value=self.transpose_value,
                 dtype=np_dtype,
-                is_groupwise_quant=is_groupwise_quant
+                is_groupwise_quant=is_groupwise_quant,
+                scales=scales,
             )
             self.backend_decoders.append(decoder)
 

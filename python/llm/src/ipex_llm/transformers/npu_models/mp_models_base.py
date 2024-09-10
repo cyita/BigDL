@@ -124,7 +124,8 @@ class LLMBaseNNFactory(NNFactory):
                   seq_len,
                   q_bias=None,
                   k_bias=None,
-                  v_bias=None):
+                  v_bias=None,
+                  scales=None):
         hidden_size = num_heads * head_dim
         num_key_value_groups = num_heads // num_key_value_heads
         # linear_kwargs = {
@@ -146,6 +147,7 @@ class LLMBaseNNFactory(NNFactory):
             hidden_size,
             bias=False,
             wt_dtype=self.dtype,
+            scale=scales[0]
         )
         # query_states = linear_func(output_channels=num_heads * head_dim, **linear_kwargs)
         if q_bias is not None:
@@ -156,6 +158,7 @@ class LLMBaseNNFactory(NNFactory):
             hidden_size,
             bias=False,
             wt_dtype=self.dtype,
+            scale=scales[1]
         )
         # key_states = linear_func(output_channels=num_key_value_heads * head_dim, **linear_kwargs)
         if k_bias is not None:
@@ -166,6 +169,7 @@ class LLMBaseNNFactory(NNFactory):
             hidden_size,
             bias=False,
             wt_dtype=self.dtype,
+            scale=scales[2]
         )
         # value_states = linear_func(output_channels=num_key_value_heads * head_dim, **linear_kwargs)
         if v_bias is not None:
@@ -235,7 +239,7 @@ class LLMBaseNNFactory(NNFactory):
         attn_output = self.reshape(attn_output, [1, seq_len, hidden_size])
 
         attn_output = self.linear(
-            attn_output, hidden_size, hidden_size, bias=False, wt_dtype=self.dtype
+            attn_output, hidden_size, hidden_size, bias=False, wt_dtype=self.dtype, scale=scales[3]
         )
         # linear_kwargs["input_node"] = attn_output
         # attn_output = linear_func(output_channels=hidden_size, **linear_kwargs)
@@ -364,6 +368,7 @@ class LLMBaseNNFactory(NNFactory):
                bias: Optional[bool] = False,
                act_dtype: npt.DTypeLike = np.float16,
                wt_dtype: npt.DTypeLike = np.float16,
+               scale = None,
                ):
         if self.is_groupwise_quant:
             qk_size = 128
@@ -376,6 +381,7 @@ class LLMBaseNNFactory(NNFactory):
                 bias=bias,
                 act_dtype=act_dtype,
                 wt_dtype=wt_dtype,
+                scale=scale,
             )
         else:
             op = super().linear(
