@@ -361,35 +361,58 @@ class LLMBaseNNFactory(NNFactory):
                input_node: ctypes._Pointer,
                output_channels: int,
                input_channels: int,
-               inc: int,
                bias: Optional[bool] = False,
                act_dtype: npt.DTypeLike = np.float16,
                wt_dtype: npt.DTypeLike = np.float16,
                ):
         if self.is_groupwise_quant:
             qk_size = 128
-            input_channels = input_channels // qk_size
-            op = super().groupwise_linear(
-                input_node=input_node,
-                input_channels=input_channels,
-                output_channels=output_channels,
-                qk_size=qk_size,
-                bias=bias,
-                act_dtype=act_dtype,
-                wt_dtype=wt_dtype,
-            )
+            n_splits = input_channels // qk_size
+            # input_channels = input_channels // qk_size
+            # op = super().groupwise_linear(
+            #     input_node=input_node,
+            #     input_channels=input_channels,
+            #     output_channels=output_channels,
+            #     qk_size=qk_size,
+            #     bias=bias,
+            #     act_dtype=act_dtype,
+            #     wt_dtype=wt_dtype,
+            # )
+            input_reshape = self.reshape(input_node, [-1, 1, qk_size])
+            input_chunks = []
+            
+            for i in range(n_splits):
+                input_slice = self.slice(input_reshape, begin=[i, 0, 0], end=[i + 1, 1, qk_size])
+                op = self.dq_linear(
+                    input_node=input_slice,
+                    output_channels=output_channels,
+                    qk_size=qk_size,
+                    input_channels=input_channels,
+                    bias=bias,
+                    act_dtype=act_dtype,
+                    wt_dtype=wt_dtype
+                )
+                input_chunks.append(op)
+            sum = input_chunks[0]
+            for i in range(n_splits - 1):
+                sum += input_chunks[i + 1]
         else:
             op = super().linear(
                 input_node=input_node,
                 input_channels=input_channels,
                 output_channels=output_channels,
-                inc=inc,
                 bias=bias,
                 act_dtype=act_dtype,
                 wt_dtype=wt_dtype,
             )
+            self.linear_ops.append(op)
+            return op
+    
+    def dq_linear(self, *args, **kwargs):
+        op = super().dq_linear(*args, **kwargs)
         self.linear_ops.append(op)
         return op
+        
     
     def groupwise_linear(self, *args, **kwargs):
         op = super().groupwise_linear(*args, **kwargs)
