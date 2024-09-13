@@ -40,6 +40,7 @@ def run_model(
     backend_cls: Any,
     op_id: str,
     replica: int = 1,
+    is_groupwise_quant: bool = False,
 ) -> torch.Tensor:
     global _model_cache
     import time
@@ -59,9 +60,21 @@ def run_model(
     op_args_flatten = []
     for w in weights:
         if isinstance(w, tuple):  # from QuantizedLinear
-            op_args.append((set_contiguous(w[0]).numpy(), set_contiguous(w[1]).numpy()))
-            op_args_flatten.append(op_args[-1][0])
-            op_args_flatten.append(op_args[-1][1])
+            if is_groupwise_quant:
+                weight = w[0]
+                scale = w[1]
+                n_splits = weight.shape[1]
+                weight_split_arr = torch.chunk(weight, n_splits, dim=1)
+                scale_split_arr = torch.chunk(scale, n_splits, dim=1)
+                for sub_w, sub_s in zip(weight_split_arr, scale_split_arr):
+                    op_args.append((sub_w.contiguous().numpy(),
+                                    sub_s.contiguous().numpy()))
+                    op_args_flatten.append(op_args[-1][0])
+                    op_args_flatten.append(op_args[-1][1])
+            else:
+                op_args.append((set_contiguous(w[0]).numpy(), set_contiguous(w[1]).numpy()))
+                op_args_flatten.append(op_args[-1][0])
+                op_args_flatten.append(op_args[-1][1])
         else:
             op_args.append(set_contiguous(w).to(torch.float16).numpy())
             op_args_flatten.append(op_args[-1])
@@ -171,6 +184,7 @@ class LLMBaseNNFactory(NNFactory):
         if v_bias is not None:
             value_states = value_states + v_bias
 
+        # print(f"query_states {query_states.shape}, {seq_len}, {num_heads}, {head_dim}")
         query_states = self.reshape(
             query_states, [1, seq_len, num_heads, head_dim]
         )
@@ -378,11 +392,12 @@ class LLMBaseNNFactory(NNFactory):
             #     act_dtype=act_dtype,
             #     wt_dtype=wt_dtype,
             # )
+            seq_len = input_node.shape[0]
             input_reshape = self.reshape(input_node, [-1, 1, qk_size])
             input_chunks = []
             
             for i in range(n_splits):
-                input_slice = self.slice(input_reshape, begin=[i, 0, 0], end=[i + 1, 1, qk_size])
+                input_slice = self.slice(input_reshape, begin=[i * seq_len, 0, 0], end=[(i + 1) * seq_len, 1, qk_size])
                 op = self.dq_linear(
                     input_node=input_slice,
                     output_channels=output_channels,
@@ -395,7 +410,9 @@ class LLMBaseNNFactory(NNFactory):
                 input_chunks.append(op)
             sum = input_chunks[0]
             for i in range(n_splits - 1):
+                # print(f"sum.shape {sum.shape}, input chunk shape {i}, {input_chunks[i + 1].shape}")
                 sum += input_chunks[i + 1]
+            return sum
         else:
             op = super().linear(
                 input_node=input_node,

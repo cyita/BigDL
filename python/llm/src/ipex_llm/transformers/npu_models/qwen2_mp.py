@@ -68,6 +68,26 @@ def split_mlp_forward(self, x):
     return self.down_proj_0(h[:, :, :9472]) + self.down_proj_1(h[:, :, 9472:])
 
 
+def get_op_parameters(parameters, is_groupwise_quant):
+    op_parameters = []
+    for value in parameters:
+        if isinstance(value, tuple):  # from QuantizedLinear
+            if is_groupwise_quant:
+                weight = value[0]
+                scale = value[1]
+                n_splits = weight.shape[1]
+                weight_split_arr = torch.chunk(weight, n_splits, dim=1)
+                scale_split_arr = torch.chunk(scale, n_splits, dim=1)
+                for w, s in zip(weight_split_arr, scale_split_arr):
+                    op_parameters.append((w.contiguous().numpy(),
+                                          s.contiguous().numpy()))
+            else:
+                op_parameters.append((value[0].numpy(), value[1].numpy()))
+        else:
+            op_parameters.append(value.to(torch.float16).numpy())
+    return op_parameters
+
+
 class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
     def __init__(
         self,
@@ -223,9 +243,12 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
             new_key_states = self.convert_to_fp16(curr_key_values[i][0])
             new_value_states = self.convert_to_fp16(curr_key_values[i][1])
 
-        print(f"{mode} start compiling")
-        self.compile()
-        print(f"{mode} end compiling")
+        print(f"{mode} start compiling-{str(num_layers)}")
+        self.compile(verbose=False)
+        print(f"{mode} end compiling-{str(num_layers)}")
+        xml_path = "qwen2-npu-dq-" + mode + "-" + str(num_layers) + ".xml"
+        if not os.path.exists(xml_path):
+            self.save(xml_path)
 
     def mlp(self, hidden_states, seq_len):
         mm1 = self.linear(
@@ -321,21 +344,18 @@ class FusedQwenLowBitMultiDecoderlayer(torch.nn.Module):
 
         self.do_print = do_print
 
-        op_parameters = []
-        for w in parameters:
-            if isinstance(w, tuple):  # from QuantizedLinear
-                op_parameters.append((w[0].numpy(), w[1].numpy()))
-            else:
-                op_parameters.append(w.to(torch.float16).numpy())
-        self.op_parameters = op_parameters
-        self.op_id = str(uuid.uuid4())
-        self.max_seq_len = max_seq_len
-        self.transpose_value = transpose_value
         if isinstance(parameters[0], tuple):
             np_dtype = np.int8 if parameters[0][0].dtype == torch.int8 else np.uint8
             is_groupwise_quant = (len(parameters[0][0].shape) > 2)
         else:  # FP16 Linear
             np_dtype = np.float16
+
+        self.op_parameters = get_op_parameters(parameters=parameters,
+                                               is_groupwise_quant=is_groupwise_quant)
+        self.op_id = str(uuid.uuid4())
+        self.max_seq_len = max_seq_len
+        self.transpose_value = transpose_value
+        
 
         self.intra_stages = intra_stages
         self.layer_indexes = layer_indexes
@@ -491,6 +511,7 @@ class FusedQwenLowBitDecoderlayer(torch.nn.Module):
         self.q_bias = q_bias
         self.k_bias = k_bias
         self.v_bias = v_bias
+        self.is_groupwise_quant = is_groupwise_quant
 
     def forward(
         self,
@@ -518,7 +539,7 @@ class FusedQwenLowBitDecoderlayer(torch.nn.Module):
         inputs += (self.layer_norm_0, self.layer_norm_1)
         inputs += (self.q_bias, self.k_bias, self.v_bias)
         hidden_states, past_key, past_value = run_model(
-            inputs, self.op_parameters, backend_cls, self.op_id, replica=2
+            inputs, self.op_parameters, backend_cls, self.op_id, replica=2, is_groupwise_quant=self.is_groupwise_quant
         )
         cache_kwargs = {"max_seq_len": self.max_seq_len, "transpose": self.transpose_value}
         key_states, value_states = past_key_value.update(
@@ -714,11 +735,15 @@ class DecodeRunner:
         self.output_queues = []
         self.decoder_processes = []
 
+        n_layers_per_rank = num_layers // (world_size - 1)
+        if num_layers % (world_size - 1) > 0:
+            n_layers_per_rank += 1
+
         for rank in range(1, world_size):
             input_q = mp.Queue()
             output_q = mp.Queue()
-            start_layer = (rank - 1) * (num_layers // (world_size - 1))
-            end_layer = (rank) * (num_layers // (world_size - 1))
+            start_layer = (rank - 1) * n_layers_per_rank
+            end_layer = (rank) * n_layers_per_rank
             if rank == world_size - 1:
                 end_layer = num_layers
             p = mp.Process(
