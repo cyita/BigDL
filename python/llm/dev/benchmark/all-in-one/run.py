@@ -614,7 +614,7 @@ def transformers_int4_npu_win(repo_id,
     # Load model in 4 bit,
     # which convert the relevant layers in the model into INT4 format
     st = time.perf_counter()
-    transpose_value = True
+    transpose_value = False
     if repo_id in CHATGLM_IDS:
         model = AutoModel.from_pretrained(model_path, load_in_low_bit=low_bit, trust_remote_code=True,
                                           optimize_model=optimize_model, max_output_len=max_output_len, max_prompt_len=int(in_out_len[0]), transpose_value_cache=transpose_value,

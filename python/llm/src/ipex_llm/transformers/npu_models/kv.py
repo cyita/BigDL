@@ -174,7 +174,8 @@ class DynamicFusedNormalCache(DynamicCache):
                 0,
                 max_len,
                 # key_states.dtype,
-                torch.float16,
+                # torch.float16,
+                torch.float32,
                 key_states.device,
                 tranpose_value=transpose_value,
             )
