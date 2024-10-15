@@ -109,6 +109,7 @@ class LLMBaseNNFactory(NNFactory):
         self.input_ops = []
         self.linear_ops = []
         self.num_scale_ops = 0
+        self.num_bias_ops = 0
         self.kv_cache_c_handle = None
         self.kv_cache_torch = []
         self.max_seq_len = max_seq_len
@@ -206,24 +207,39 @@ class LLMBaseNNFactory(NNFactory):
                 query_states = sum(query_states_to_concat)
                 key_states = sum(key_states_to_concat)
                 value_states = sum(value_states_to_concat)
+                
+                if q_bias is not None:
+                    query_states = query_states + q_bias
+                if k_bias is not None:
+                    key_states = key_states + k_bias
+                if v_bias is not None:
+                    value_states = value_states + v_bias
             else:
-                print(hidden_size, hidden_states.shape)
+                # print(hidden_size, hidden_states.shape)
+                if q_bias is not None:
+                    self.num_bias_ops += 1
+                    q_bias = True
+                else:
+                    q_bias = False
+                if k_bias is not None:
+                    self.num_bias_ops += 1
+                    k_bias = True
+                else:
+                    k_bias = False
+                if v_bias is not None:
+                    self.num_bias_ops += 1
+                    v_bias = True
+                else:
+                    v_bias = False
                 query_states = self.dq_split_linear(hidden_states, num_heads * head_dim,
-                                                    hidden_size, self.n_splits_linear,
+                                                    hidden_size, self.n_splits_linear, q_bias,
                                                     wt_dtype=self.dtype)
                 key_states = self.dq_split_linear(hidden_states, num_key_value_heads * head_dim,
-                                                hidden_size, self.n_splits_linear,
+                                                hidden_size, self.n_splits_linear, k_bias,
                                                 wt_dtype=self.dtype)
                 value_states = self.dq_split_linear(hidden_states, num_key_value_heads * head_dim,
-                                                    hidden_size, self.n_splits_linear,
+                                                    hidden_size, self.n_splits_linear, v_bias,
                                                     wt_dtype=self.dtype)
-            
-        if q_bias is not None:
-            query_states = query_states + q_bias
-        if k_bias is not None:
-            key_states = key_states + k_bias
-        if v_bias is not None:
-            value_states = value_states + v_bias
 
         query_states = self.reshape(
             query_states, [1, seq_len, num_heads, head_dim]
@@ -314,7 +330,7 @@ class LLMBaseNNFactory(NNFactory):
                 attn_output = sum(attn_output_to_concat)
             else:
                 attn_output = self.dq_split_linear(attn_output, hidden_size, hidden_size,
-                                                self.n_splits_linear, wt_dtype=self.dtype)
+                                                self.n_splits_linear, False, wt_dtype=self.dtype)
                 
         return attn_output, new_key_states, new_value_states
 
@@ -352,9 +368,9 @@ class LLMBaseNNFactory(NNFactory):
                 mm2 = sum(mm2_to_concat)
             else:
                 mm1 = self.dq_split_linear(hidden_states, self.intermediate_size, self.hidden_size,
-                                        self.n_splits_linear, wt_dtype=self.dtype)
+                                        self.n_splits_linear, False, wt_dtype=self.dtype)
                 mm2 = self.dq_split_linear(hidden_states, self.intermediate_size, self.hidden_size,
-                                        self.n_splits_linear, wt_dtype=self.dtype)
+                                        self.n_splits_linear, False, wt_dtype=self.dtype)
             mm1 = self.eltwise_mul(self.swish(mm1), mm2)  # type: ignore[attr-defined]
 
         if self.n_splits_down_proj == 1:
@@ -377,7 +393,7 @@ class LLMBaseNNFactory(NNFactory):
                 hidden_states = sum(hidden_states_to_concat)
             else:
                 hidden_states = self.dq_split_linear(mm1, self.hidden_size, self.intermediate_size,
-                                                    self.n_splits_down_proj, wt_dtype=self.dtype)
+                                                    self.n_splits_down_proj, False, wt_dtype=self.dtype)
         return hidden_states
 
     def layer_norm(self, hidden_states, layernorm_weight):
@@ -551,9 +567,10 @@ class LLMBaseNNFactory(NNFactory):
                         output_channels: int,
                         input_channels: int,
                         n_splits: int,
+                        bias: bool,
                         act_dtype: npt.DTypeLike = np.float16,
                         wt_dtype: npt.DTypeLike = np.float16):
-        op = super().split(input_node, 0, n_splits, output_channels, input_channels, act_dtype, wt_dtype)
+        op = super().split(input_node, 0, n_splits, output_channels, input_channels, bias, act_dtype, wt_dtype)
         self.linear_ops.append(op)
         return op
 
@@ -609,12 +626,15 @@ class LLMBaseNNFactory(NNFactory):
     def set_weights_async(self, op_id, weights):
         offset = len(self.input_ops) + len(self.cache_parameter_ops)
         print(f"graph linear size: {len(self.linear_ops)}"
-              f" graph scale size: {self.num_scale_ops}")
-        invalidInputError(len(weights) == (len(self.linear_ops) + self.num_scale_ops),
+              f" graph scale size: {self.num_scale_ops}"
+              f" graph bias size: {self.num_bias_ops}")
+        invalidInputError(len(weights) == (len(self.linear_ops) + self.num_scale_ops) or 
+                          len(weights) == (len(self.linear_ops) + self.num_scale_ops + self.num_bias_ops),
                           (f"weights size does not match graph, "
                            f"with weights size: {len(weights)} and "
                            f" graph linear size: {len(self.linear_ops)}"
-                           f" graph scale size: {self.num_scale_ops}"))
+                           f" graph scale size: {self.num_scale_ops}"
+                           f" graph bias size: {self.num_bias_ops}"))
         self.setWeights(offset, op_id, *weights)#, verify_size=True)
 
     @staticmethod

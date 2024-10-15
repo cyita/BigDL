@@ -266,9 +266,9 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
         self.compile()
         print(f"{mode} end compiling - {num_layers}-{transpose_value}-{n_splits_linear}-{n_splits_down_proj}")
         qwen_size = "7b" if self.hidden_size == 3584 else "1.5b"
-        xml_path = f"scaleafter-reshape-split/qwen-{qwen_size}-npu-sa-dq-{mode}-{num_layers}-{transpose_value}-{n_splits_linear}-{n_splits_down_proj}.xml"
+        xml_path = f"scaleafter-reshape-split-bias/qwen-{qwen_size}-npu-sa-dq-{mode}-{num_layers}-{transpose_value}-{n_splits_linear}-{n_splits_down_proj}.xml"
 
-        if not os.path.exists(xml_path) and mode=="decode":
+        if not os.path.exists(xml_path):# and mode=="decode":
             self.save(xml_path)
 
 
@@ -410,7 +410,7 @@ class FusedQwenLowBitMultiDecoderlayer(torch.nn.Module):
         offset = 0
         for i in range(intra_stages):
             start, end = self.layer_ranges[i]
-            curr_linear_ops = len(self.backend_decoders[i].linear_ops) + self.backend_decoders[i].num_scale_ops
+            curr_linear_ops = len(self.backend_decoders[i].linear_ops) + self.backend_decoders[i].num_scale_ops + self.backend_decoders[i].num_bias_ops
             curr_parameters = self.op_parameters[offset:offset + curr_linear_ops]
             self.backend_decoders[i].set_weights(self.op_id, curr_parameters)
             offset = offset + curr_linear_ops
@@ -622,6 +622,8 @@ def run_decode(
                     l_weights.append(l.weight)
                     scales.append(l.scale)
                 weights.append((torch.stack(l_weights, axis=0), torch.stack(scales, axis=0)))
+                if l.bias is not None:
+                    weights.append(l.bias.detach().to(torch.float16))
 
         # for q, k in zip(attn_layer.q_proj_dq_list, attn_layer.k_proj_dq_list):
         #     weights.append((q.weight, q.scale))
