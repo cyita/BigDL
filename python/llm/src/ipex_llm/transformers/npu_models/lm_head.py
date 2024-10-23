@@ -57,7 +57,8 @@ class LMHeadLinear(NNFactory):
 
         if use_split:
             input = self.parameter((1, self.batch, self.inC))
-            res = self.dq_split_linear(input, self.split_num, self.outC, self.inC, wt_dtype=dtype)
+            res = self.dq_split_linear(input, self.split_num, self.outC, self.inC, wt_dtype=dtype,
+                                       scale_factor=False)
         else:
             input = self.parameter((self.batch, self.inC))
             split_size = self.inC // split_num // 2 * 2
