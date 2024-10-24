@@ -247,9 +247,18 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
             new_key_states = self.convert_to_fp16(curr_key_values[i][0])
             new_value_states = self.convert_to_fp16(curr_key_values[i][1])
 
-        print(f"{mode} start compiling")
-        self.compile()
-        print(f"{mode} end compiling")
+        print(f"{mode} start compiling - {num_layers}-{transpose_value}-{n_splits_linear}-{n_splits_down_proj}")
+        t1 = time.perf_counter()
+        # self.compile(npu_dpu_groups=4 if num_layers != 2 and mode != "prefill" else 6)
+        self.compile(npu_dpu_groups=4 if num_layers != 2 else 6)
+        # self.compile(npu_dpu_groups=6)
+        t2 = time.perf_counter()
+        print(f"{mode} end compiling - {num_layers}-{transpose_value}-{n_splits_linear}-{n_splits_down_proj}, time: {t2 - t1}s")
+        qwen_size = "7b" if self.hidden_size == 3584 else "1.5b"
+        xml_path = f"scaleafter-reshape-split-noscale/qwen-{qwen_size}-npu-sa-dq-{mode}-{num_layers}-{transpose_value}-{n_splits_linear}-{n_splits_down_proj}.xml"
+
+        if not os.path.exists(xml_path):
+            self.save(xml_path)
 
     def build_decoder(
         self,
@@ -1042,8 +1051,10 @@ def gen_qwen2_fused_model_forward(prefill_runner, decode_runner):
             if use_cache:
                 use_cache = False
 
+        t1 = time.perf_counter()
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
+        t2 = time.perf_counter()
 
         if seq_length > 1:
             past_key_values_length = 0
@@ -1087,6 +1098,7 @@ def gen_qwen2_fused_model_forward(prefill_runner, decode_runner):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = None
 
+        t3 = time.perf_counter()
         if seq_length == 1:
             layers_runner = decode_runner
         else:
@@ -1099,11 +1111,13 @@ def gen_qwen2_fused_model_forward(prefill_runner, decode_runner):
             output_attentions=output_attentions,
             use_cache=use_cache,
         )
+        t4 = time.perf_counter()
         hidden_states = layer_outputs[0]
 
         next_decoder_cache = layer_outputs[1]
 
         hidden_states = self.norm(hidden_states)
+        t5 = time.perf_counter()
 
         # add hidden states from the last decoder layer
         if output_hidden_states:
@@ -1116,6 +1130,12 @@ def gen_qwen2_fused_model_forward(prefill_runner, decode_runner):
                 for v in [hidden_states, next_cache, all_hidden_states, all_self_attns]
                 if v is not None
             )
+        t6 = time.perf_counter()
+        if seq_length == 1:
+            self.embed_perf.append(t2 - t1)
+            self.other_perf.append(t3 - t2 + t6 - t5)
+            self.forward_perf.append(t4 - t3)
+            self.norm_perf.append(t5 - t4)
 
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
@@ -1149,6 +1169,14 @@ def qwen2_casullm_forward(
     )
     return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+    if input_ids.shape[1] > 1:
+        self.model.embed_perf = []
+        self.model.other_perf = []
+        self.model.forward_perf = []
+        self.model.norm_perf = []
+        self.decoder_perf = []
+        self.lm_head_perf = []
+    t1 = time.perf_counter()
     # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
     outputs = self.model(
         input_ids=input_ids,
@@ -1162,6 +1190,7 @@ def qwen2_casullm_forward(
         return_dict=return_dict,
         # cache_position=cache_position,
     )
+    t2 = time.perf_counter()
 
     hidden_states = outputs[0]
     # ipex-llm change start
@@ -1169,6 +1198,11 @@ def qwen2_casullm_forward(
     # ipex-llm change end
     logits = self.lm_head(hidden_states)
     logits = logits.float()
+
+    t3 = time.perf_counter()
+    if input_ids.shape[1] == 1:
+        self.decoder_perf.append(t2 - t1)
+        self.lm_head_perf.append(t3 - t2)
 
     loss = None
     if labels is not None:

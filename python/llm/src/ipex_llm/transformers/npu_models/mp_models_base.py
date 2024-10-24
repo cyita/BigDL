@@ -163,7 +163,7 @@ class LLMBaseNNFactory(NNFactory):
             )
         else:
             hidden_states = self.unsqueeze(hidden_states, axis=0)
-            if mode == "prefill":
+            if mode == "prefill" and False:
                 query_states_to_concat = []
                 key_states_to_concat = []
                 value_states_to_concat = []

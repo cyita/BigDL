@@ -2458,6 +2458,10 @@ class BenchmarkWrapper:
             if this_peer_finished and not synced_gpus:
                 break
 
+        print(f"decoder_perf: {[round(element * 1000, 2) for element in self.model.decoder_perf]}")
+        print(f"forward_perf: {[round(element * 1000, 2) for element in self.model.model.forward_perf]}")
+        print(f"lm_head_perf: {[round(element * 1000, 2) for element in self.model.lm_head_perf]}")
+        print(f"decoder: {np.mean(self.model.decoder_perf) * 1000} ms (embed: {np.mean(self.model.model.embed_perf) * 1000} ms, forward: {np.mean(self.model.model.forward_perf) * 1000} ms, norm: {np.mean(self.model.model.norm_perf) * 1000} ms, other: {np.mean(self.model.model.other_perf) * 1000} ms), lmhead: {np.mean(self.model.lm_head_perf) * 1000} ms, ")
         if self.do_print:
             if self.device.type == "xpu":
                 print(f"=========First token cost {first_token_time:.4f} s and {memory_every_token[0]} GB=========")
