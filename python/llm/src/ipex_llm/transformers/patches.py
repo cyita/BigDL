@@ -13,3 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+#
+
+from typing import List
+from transformers.dynamic_module_utils import get_imports
+
+
+def patch_flash_attn_import(filename: str) -> List[str]:
+    """Work around for https://huggingface.co/microsoft/phi-1_5/discussions/72."""
+    imports = get_imports(filename)
+    if "flash_attn" in imports:
+        imports.remove("flash_attn")
+    return imports
+
+
+def patch_sdpa_available() -> bool:
+    return False
