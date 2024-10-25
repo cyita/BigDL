@@ -185,6 +185,10 @@ class _BaseAutoModelClass:
             model.config.update({"bigdl_transformers_low_bit": qtype})
             model.share_memory()
 
+            print("sleeping....")
+            import time
+            time.sleep(10)
+
             print(llm)
 
             if not pipeline:
