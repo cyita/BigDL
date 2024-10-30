@@ -165,21 +165,65 @@ class LLMBaseNNFactory(NNFactory):
             )
         else:
             hidden_states = self.unsqueeze(hidden_states, axis=0)
-            query_states = self.dq_split_linear(hidden_states, num_heads * head_dim,
+            if mode == "prefill":
+                # query_states = self.dq_split_linear(hidden_states, num_heads * head_dim,
+                #                                     hidden_size, self.n_splits_linear,
+                #                                     wt_dtype=self.dtype,
+                #                                     scale_factor=(self.group_size == 0),
+                #                                     is_prefill=(mode == "prefill"))
+                # key_states = self.dq_split_linear(hidden_states, num_key_value_heads * head_dim,
+                #                                 hidden_size, self.n_splits_linear,
+                #                                 wt_dtype=self.dtype,
+                #                                 scale_factor=(self.group_size == 0),
+                #                                 is_prefill=(mode == "prefill"))
+                # value_states = self.dq_split_linear(hidden_states, num_key_value_heads * head_dim,
+                #                                     hidden_size, self.n_splits_linear,
+                #                                     wt_dtype=self.dtype,
+                #                                     scale_factor=(self.group_size == 0),
+                #                                     is_prefill=(mode == "prefill"))
+                concat_linear = self.dq_split_linear(hidden_states,
+                                                     num_key_value_heads * head_dim * 2 + num_heads * head_dim,
+                                                     hidden_size, self.n_splits_linear,
+                                                     wt_dtype=self.dtype,
+                                                     scale_factor=(self.group_size == 0),
+                                                     is_prefill=(mode == "prefill"))
+                query_states = self.slice(concat_linear, begin=[0, 0, 0],
+                                          end=[1, seq_len, num_heads * head_dim])
+                key_states = self.slice(concat_linear, begin=[0, 0, num_heads * head_dim],
+                                        end=[1, seq_len, num_heads * head_dim + num_key_value_heads * head_dim])
+                value_states = self.slice(concat_linear,
+                                          begin=[0, 0, num_heads * head_dim + num_key_value_heads * head_dim],
+                                          end=[1, seq_len, num_heads * head_dim + num_key_value_heads * head_dim * 2])
+            else:
+                query_states = self.dq_split_linear(hidden_states, num_heads * head_dim,
+                                                    hidden_size, self.n_splits_linear,
+                                                    wt_dtype=self.dtype,
+                                                    scale_factor=(self.group_size == 0),
+                                                    is_prefill=(mode == "prefill"))
+                key_states = self.dq_split_linear(hidden_states, num_key_value_heads * head_dim,
                                                 hidden_size, self.n_splits_linear,
                                                 wt_dtype=self.dtype,
                                                 scale_factor=(self.group_size == 0),
                                                 is_prefill=(mode == "prefill"))
-            key_states = self.dq_split_linear(hidden_states, num_key_value_heads * head_dim,
-                                                hidden_size, self.n_splits_linear,
-                                                wt_dtype=self.dtype,
-                                                scale_factor=(self.group_size == 0),
-                                                is_prefill=(mode == "prefill"))
-            value_states = self.dq_split_linear(hidden_states, num_key_value_heads * head_dim,
-                                                hidden_size, self.n_splits_linear,
-                                                wt_dtype=self.dtype,
-                                                scale_factor=(self.group_size == 0),
-                                                is_prefill=(mode == "prefill"))
+                value_states = self.dq_split_linear(hidden_states, num_key_value_heads * head_dim,
+                                                    hidden_size, self.n_splits_linear,
+                                                    wt_dtype=self.dtype,
+                                                    scale_factor=(self.group_size == 0),
+                                                    is_prefill=(mode == "prefill"))
+                # concat_linear = self.dq_split_linear(hidden_states,
+                #                                      num_key_value_heads * head_dim * 2 + num_heads * head_dim,
+                #                                      hidden_size, self.n_splits_linear,
+                #                                      wt_dtype=self.dtype,
+                #                                      scale_factor=(self.group_size == 0),
+                #                                      is_prefill=(mode == "prefill"))
+                # query_states = self.slice(concat_linear, begin=[0, 0, 0],
+                #                           end=[1, seq_len, num_heads * head_dim])
+                # key_states = self.slice(concat_linear, begin=[0, 0, num_heads * head_dim],
+                #                         end=[1, seq_len, num_heads * head_dim + num_key_value_heads * head_dim])
+                # value_states = self.slice(concat_linear,
+                #                           begin=[0, 0, num_heads * head_dim + num_key_value_heads * head_dim],
+                #                           end=[1, seq_len, num_heads * head_dim + num_key_value_heads * head_dim * 2])
+            
 
         if q_bias is not None:
             query_states = query_states + q_bias

@@ -533,15 +533,40 @@ def run_decode(
                 weights.append((g.weight, g.scale))
                 weights.append((u.weight, u.scale))
         else:
+            qkv_weights = []
+            qkv_scales = []
             for layer_list in [attn_layer.q_proj_dq_list, attn_layer.k_proj_dq_list,
-                               attn_layer.v_proj_dq_list, attn_layer.o_proj_dq_list,
-                               mlp_layer.gate_proj_dq_list, mlp_layer.up_proj_dq_list]:
+                            attn_layer.v_proj_dq_list]:
                 l_weights = []
                 scales = []
                 for l in layer_list:
                     l_weights.append(l.weight)
                     scales.append(l.scale)
-                weights.append((torch.stack(l_weights, axis=0), torch.stack(scales, axis=0)))
+                qkv_weights.append(torch.stack(l_weights, axis=0))
+                qkv_scales.append(torch.stack(scales, axis=0))
+            
+            a = torch.cat(qkv_weights, dim=1)
+            b = torch.cat(qkv_scales, dim=1)
+            weights.append((a, b))
+
+            for layer_list in [attn_layer.o_proj_dq_list,
+                            mlp_layer.gate_proj_dq_list, mlp_layer.up_proj_dq_list]:
+                l_weights = []
+                scales = []
+                for l in layer_list:
+                    l_weights.append(l.weight)
+                    scales.append(l.scale)
+                weights.append((torch.stack(l_weights, axis=0),
+                                torch.stack(scales, axis=0)))
+            # for layer_list in [attn_layer.q_proj_dq_list, attn_layer.k_proj_dq_list,
+            #                    attn_layer.v_proj_dq_list, attn_layer.o_proj_dq_list,
+            #                    mlp_layer.gate_proj_dq_list, mlp_layer.up_proj_dq_list]:
+            #     l_weights = []
+            #     scales = []
+            #     for l in layer_list:
+            #         l_weights.append(l.weight)
+            #         scales.append(l.scale)
+            #     weights.append((torch.stack(l_weights, axis=0), torch.stack(scales, axis=0)))
 
         if n_splits_down_proj == 1:
             for l in mlp_layer.down_proj_dq_list:
@@ -773,15 +798,38 @@ def run_prefill(
                 weights.append((g.weight, g.scale))
                 weights.append((u.weight, u.scale))
         else:
+            qkv_weights = []
+            qkv_scales = []
             for layer_list in [attn_layer.q_proj_dq_list, attn_layer.k_proj_dq_list,
-                               attn_layer.v_proj_dq_list, attn_layer.o_proj_dq_list,
-                               mlp_layer.gate_proj_dq_list, mlp_layer.up_proj_dq_list]:
+                            attn_layer.v_proj_dq_list]:
                 l_weights = []
                 scales = []
                 for l in layer_list:
                     l_weights.append(l.weight)
                     scales.append(l.scale)
-                weights.append((torch.stack(l_weights, axis=0), torch.stack(scales, axis=0)))
+                qkv_weights.append(torch.stack(l_weights, axis=0))
+                qkv_scales.append(torch.stack(scales, axis=0))
+
+            weights.append((torch.cat(qkv_weights, dim=1), torch.cat(qkv_scales, dim=1)))
+
+            for layer_list in [attn_layer.o_proj_dq_list,
+                            mlp_layer.gate_proj_dq_list, mlp_layer.up_proj_dq_list]:
+                l_weights = []
+                scales = []
+                for l in layer_list:
+                    l_weights.append(l.weight)
+                    scales.append(l.scale)
+                weights.append((torch.stack(l_weights, axis=0),
+                                torch.stack(scales, axis=0)))
+            # for layer_list in [attn_layer.q_proj_dq_list, attn_layer.k_proj_dq_list,
+            #                    attn_layer.v_proj_dq_list, attn_layer.o_proj_dq_list,
+            #                    mlp_layer.gate_proj_dq_list, mlp_layer.up_proj_dq_list]:
+            #     l_weights = []
+            #     scales = []
+            #     for l in layer_list:
+            #         l_weights.append(l.weight)
+            #         scales.append(l.scale)
+            #     weights.append((torch.stack(l_weights, axis=0), torch.stack(scales, axis=0)))
 
         if n_splits_down_proj == 1:
             for l in mlp_layer.down_proj_dq_list:
