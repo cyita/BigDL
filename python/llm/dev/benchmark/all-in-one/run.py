@@ -629,18 +629,18 @@ def transformers_int4_npu_win(repo_id,
     elif repo_id in LLAMA_IDS:
         model = AutoModelForCausalLM.from_pretrained(model_path, load_in_low_bit=low_bit, trust_remote_code=True, torch_dtype=torch.float16,
                                                      optimize_model=optimize_model, max_context_len=max_context_len, max_prompt_len=int(in_out_len[0]), transpose_value_cache=transpose_value_cache,
-                                                     use_cache=True, attn_implementation="eager").eval()
+                                                     use_cache=True, attn_implementation="eager", quantization_group_size=128).eval()
         tokenizer = LlamaTokenizer.from_pretrained(model_path, trust_remote_code=True)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_path, load_in_low_bit=low_bit, trust_remote_code=True, torch_dtype=torch.float16,
                                                      optimize_model=optimize_model, max_context_len=max_context_len, max_prompt_len=int(in_out_len[0]), transpose_value_cache=transpose_value_cache,
-                                                     use_cache=True, attn_implementation="eager").eval()
+                                                     use_cache=True, attn_implementation="eager", quantization_group_size=128).eval()
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     end = time.perf_counter()
     load_time = end - st
     print(">> loading of model costs {}s".format(load_time))
 
-    model = BenchmarkWrapper(model)
+    model = BenchmarkWrapper(model, do_print=True)
 
     result = {}
     with torch.inference_mode():
@@ -654,6 +654,7 @@ def transformers_int4_npu_win(repo_id,
             input_ids = tokenizer.encode(input_str, return_tensors="pt")
             input_ids = input_ids[:, :in_len]
             true_str = tokenizer.batch_decode(input_ids)[0]
+            print(true_str)
             input_list = [true_str] * batch_size
             input_ids = tokenizer(input_list, return_tensors="pt").input_ids
             input_ids = input_ids[:, :in_len]
@@ -665,7 +666,7 @@ def transformers_int4_npu_win(repo_id,
                                             min_new_tokens=out_len, num_beams=num_beams)
                 end = time.perf_counter()
                 print("model generate cost: " + str(end - st))
-                output = tokenizer.batch_decode(output_ids)
+                output = tokenizer.batch_decode(output_ids[:, actual_in_len:])
                 print(output[0])
                 actual_out_len = output_ids.shape[1] - actual_in_len
                 if i >= warm_up:
