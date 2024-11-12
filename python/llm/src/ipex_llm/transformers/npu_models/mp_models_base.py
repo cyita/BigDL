@@ -484,18 +484,18 @@ class LLMBaseNNFactory(NNFactory):
         
         return hidden_states
 
-    def rotate_half(self, x, *, num_heads, seq_len, head_dim):
-        x1 = self.slice(
-            x,
-            [0, 0, 0, 0],
-            [1, num_heads, seq_len, head_dim // 2],
-        )
-        x2 = self.slice(
-            x,
-            [0, 0, 0, head_dim // 2],
-            [1, num_heads, seq_len, head_dim],
-        )
-        return self.concat(self.negative(x2), x1, axis=-1)
+    # def rotate_half(self, x, *, num_heads, seq_len, head_dim):
+    #     x1 = self.slice(
+    #         x,
+    #         [0, 0, 0, 0],
+    #         [1, num_heads, seq_len, head_dim // 2],
+    #     )
+    #     x2 = self.slice(
+    #         x,
+    #         [0, 0, 0, head_dim // 2],
+    #         [1, num_heads, seq_len, head_dim],
+    #     )
+    #     return self.concat(self.negative(x2), x1, axis=-1)
 
     def apply_rotary_pos_emb(self, *, q, k, cos, sin, position_ids,
                              num_heads, seq_len, head_dim):
@@ -505,15 +505,18 @@ class LLMBaseNNFactory(NNFactory):
             sin = self.gather(sin, self.convert_to_int32(position_ids), self.constant(1), 0)
             cos = self.unsqueeze(cos, [1])
             sin = self.unsqueeze(sin, [1])
+        
+        rotate_half_q = self.rotate_half(q)
+        rotate_half_k = self.rotate_half(k)
 
-        rotate_half_q = self.rotate_half(q,
-                                         num_heads=num_heads,
-                                         seq_len=seq_len,
-                                         head_dim=head_dim)
-        rotate_half_k = self.rotate_half(k,
-                                         num_heads=num_heads,
-                                         seq_len=seq_len,
-                                         head_dim=head_dim)
+        # rotate_half_q = self.rotate_half(q,
+        #                                  num_heads=num_heads,
+        #                                  seq_len=seq_len,
+        #                                  head_dim=head_dim)
+        # rotate_half_k = self.rotate_half(k,
+        #                                  num_heads=num_heads,
+        #                                  seq_len=seq_len,
+        #                                  head_dim=head_dim)
 
         q_embed = self.eltwise_add(
             self.eltwise_mul(q, cos), self.eltwise_mul(rotate_half_q, sin)
