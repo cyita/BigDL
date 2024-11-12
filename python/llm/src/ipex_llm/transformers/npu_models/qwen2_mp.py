@@ -247,9 +247,9 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
             self.compile()
         print(f"{mode} end compiling")
         qwen_size = "7b" if self.hidden_size == 3584 else "1.5b"
-        xml_path = f"gw/qwen-{qwen_size}-npu-qkv-split-{mode}-{num_layers}-{n_splits_linear}-{n_splits_down_proj}.xml"
+        xml_path = f"gw/qwen-{qwen_size}-npu-norm-1-{mode}-{num_layers}-{n_splits_linear}-{n_splits_down_proj}.xml"
 
-        if not os.path.exists(xml_path):
+        if not os.path.exists(xml_path) or mode == "prefill":
             self.save(xml_path)
 
     def build_decoder(
@@ -267,10 +267,11 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
     ):
 
         residual = hidden_states
-        input_2d = self.reshape(hidden_states, (self.batch_size * self.seq_len, self.hidden_size))
-        input_2d = self.layer_norm(input_2d, input_layernorm_weight)
+        # input_2d = self.reshape(hidden_states, (self.batch_size * self.seq_len, self.hidden_size))
+        # input_2d = self.layer_norm(input_2d, input_layernorm_weight)
+        input_3d = self.layer_norm(hidden_states, input_layernorm_weight)
         attn_output, new_key_states, new_value_states = self.attention(
-            hidden_states=input_2d,
+            hidden_states=input_3d,
             position_ids=position_ids,
             attention_mask=attention_mask,
             past_key=past_key,

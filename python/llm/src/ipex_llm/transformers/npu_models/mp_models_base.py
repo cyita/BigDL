@@ -138,8 +138,8 @@ class LLMBaseNNFactory(NNFactory):
                   use_prefill_sdp=False):
         hidden_size = num_heads * head_dim
         num_key_value_groups = num_heads // num_key_value_heads
-        if self.n_splits_linear != 1:
-            hidden_states = self.unsqueeze(hidden_states, axis=0)
+        # if self.n_splits_linear != 1:
+        #     hidden_states = self.unsqueeze(hidden_states, axis=0)
 
         if mode == "prefill":
             concat_linear = self.linear(hidden_states,
@@ -478,9 +478,10 @@ class LLMBaseNNFactory(NNFactory):
         )
         eps = self.constant(self.rms_norm_eps)
         hidden_states = self.eltwise_div(hidden_states, self.sqrt(self.eltwise_add(variance, eps)))
-        layernorm_weight = self.convert_to_fp32(layernorm_weight)
-        hidden_states = self.eltwise_mul(layernorm_weight, hidden_states)
         hidden_states = self.convert_to_fp16(hidden_states)
+        # layernorm_weight = self.convert_to_fp32(layernorm_weight)
+        hidden_states = self.eltwise_mul(hidden_states, layernorm_weight)
+        
         return hidden_states
 
     def rotate_half(self, x, *, num_heads, seq_len, head_dim):
