@@ -148,7 +148,8 @@ class LLMBaseNNFactory(NNFactory):
                                         wt_dtype=self.dtype,
                                         n_splits=self.n_splits_linear,
                                         scale_factor=(self.group_size == 0),
-                                        is_prefill=(mode == "prefill"))
+                                        is_prefill=(mode == "prefill"),
+                                        use_dq=False)
             if q_bias is not None:
                 concat_linear = concat_linear + q_bias
             query_states, key_states, value_states = self.variadic_split(
@@ -247,7 +248,7 @@ class LLMBaseNNFactory(NNFactory):
         else:
             kv_seq_len = seq_len
 
-        if mode == "prefill" and num_key_value_heads == 2:
+        if False:
             key_states_1 = self.slice(key_states, begin=[0, 0, 0, 0],
                                       end=[1, 1, seq_len, head_dim])
             key_states_2 = self.slice(key_states, begin=[0, 1, 0, 0],
@@ -612,7 +613,8 @@ class LLMBaseNNFactory(NNFactory):
                wt_dtype: npt.DTypeLike = np.float16,
                n_splits: int = 1,
                scale_factor: bool = True,
-               is_prefill: bool = False):
+               is_prefill: bool = False,
+               use_dq: bool = True):
         if n_splits == 1:
             op = super().linear(input_node, output_channels,
                                 input_channels, bias, act_dtype,
@@ -622,7 +624,8 @@ class LLMBaseNNFactory(NNFactory):
                                          output_channels, input_channels,
                                          bias=bias, act_dtype=act_dtype,
                                          wt_dtype=wt_dtype, scale_factor=scale_factor,
-                                         is_prefill=is_prefill)
+                                         is_prefill=is_prefill,
+                                         use_dq=use_dq)
         self.linear_ops.append(op)
         return op
 

@@ -249,7 +249,7 @@ class LowBitQwenMultiDecoderlayer(LLMBaseNNFactory):
             self.compile()
         print(f"{mode} end compiling")
         qwen_size = "7b" if self.hidden_size == 3584 else "1.5b"
-        xml_path = f"gw/qwen-{qwen_size}-npu-norm-1-{mode}-{num_layers}-{n_splits_linear}-{n_splits_down_proj}.xml"
+        xml_path = f"gw/qwen-{qwen_size}-npu-norm-2-{mode}-{num_layers}-{n_splits_linear}-{n_splits_down_proj}.xml"
 
         if not os.path.exists(xml_path) or mode == "prefill":
             self.save(xml_path)
@@ -849,10 +849,10 @@ def run_prefill(
                 for l in layer_list:
                     l_weights.append(l.weight)
                     scales.append(l.scale)
-                qkv_weights.append(torch.stack(l_weights, axis=0))
-                qkv_scales.append(torch.stack(scales, axis=0))
+                qkv_weights.append(torch.stack(l_weights, axis=1))
+                qkv_scales.append(torch.stack(scales, axis=1))
 
-            weights.append((torch.cat(qkv_weights, dim=1), torch.cat(qkv_scales, dim=1)))
+            weights.append((torch.cat(qkv_weights, dim=0), torch.cat(qkv_scales, dim=0)))
 
             for layer_list in [attn_layer.o_proj_dq_list,
                             mlp_layer.gate_proj_dq_list, mlp_layer.up_proj_dq_list,
