@@ -247,28 +247,55 @@ class LLMBaseNNFactory(NNFactory):
         else:
             kv_seq_len = seq_len
 
-        key_states = self.repeat_kv(hidden_states=key_states,
-                                    n_rep=num_key_value_groups,
-                                    num_key_value_heads=num_key_value_heads,
-                                    kv_seq_len=kv_seq_len,
-                                    head_dim=head_dim,)
-        value_states = self.repeat_kv(hidden_states=value_states,
-                                      n_rep=num_key_value_groups,
-                                      num_key_value_heads=num_key_value_heads,
-                                      kv_seq_len=kv_seq_len,
-                                      head_dim=head_dim,
-                                      transpose=(self.transpose_value and (not use_ov_sdp)))
-        if use_ov_sdp:
-            value_states = self.convert_to_fp32(value_states)
-            key_states = self.convert_to_fp32(key_states)
-            query_states = self.convert_to_fp32(query_states)
-            attn_output = self.scaled_dot_product_attention(
-                query_states, key_states, value_states, None, True)
-            attn_output = self.convert_to_fp16(attn_output)
-        else:
-            attn_weight = self.matmul(query_states, key_states, False, True) / (
+        if mode == "prefill" and num_key_value_heads == 2:
+            key_states_1 = self.slice(key_states, begin=[0, 0, 0, 0],
+                                      end=[1, 1, seq_len, head_dim])
+            key_states_2 = self.slice(key_states, begin=[0, 1, 0, 0],
+                                      end=[1, 2, seq_len, head_dim])
+            query_states_1 = self.slice(query_states, begin=[0, 0, 0, 0],
+                                        end=[1, num_heads//num_key_value_heads, seq_len, head_dim])
+            query_states_2 = self.slice(query_states, begin=[0, num_heads//num_key_value_heads, 0, 0],
+                                        end=[1, num_heads, seq_len, head_dim])
+            attn_weight_1 = self.matmul(query_states_1, key_states_1, False, True)
+            attn_weight_2 = self.matmul(query_states_2, key_states_2, False, True)
+            attn_weight = self.concat(attn_weight_1, attn_weight_2, axis=1) / (
                 math.sqrt(head_dim)
             )
+            # attention_mask = self.convert_to_fp16(attention_mask)
+            attn_weight = self.eltwise_add(attn_weight, attention_mask)
+            attn_weight = self.convert_to_fp32(attn_weight)
+            attn_weight = self.softmax(attn_weight, -1)
+            attn_weight = self.convert_to_fp16(attn_weight)
+            value_states = self.repeat_kv(hidden_states=value_states,
+                                        n_rep=num_key_value_groups,
+                                        num_key_value_heads=num_key_value_heads,
+                                        kv_seq_len=kv_seq_len,
+                                        head_dim=head_dim,
+                                        transpose=(self.transpose_value and (not use_ov_sdp)))
+            attn_output = self.matmul(attn_weight, value_states, False, self.transpose_value)
+        else:
+            key_states = self.repeat_kv(hidden_states=key_states,
+                                        n_rep=num_key_value_groups,
+                                        num_key_value_heads=num_key_value_heads,
+                                        kv_seq_len=kv_seq_len,
+                                        head_dim=head_dim,)
+            value_states = self.repeat_kv(hidden_states=value_states,
+                                        n_rep=num_key_value_groups,
+                                        num_key_value_heads=num_key_value_heads,
+                                        kv_seq_len=kv_seq_len,
+                                        head_dim=head_dim,
+                                        transpose=(self.transpose_value and (not use_ov_sdp)))
+            if use_ov_sdp:
+                value_states = self.convert_to_fp32(value_states)
+                key_states = self.convert_to_fp32(key_states)
+                query_states = self.convert_to_fp32(query_states)
+                attn_output = self.scaled_dot_product_attention(
+                    query_states, key_states, value_states, None, True)
+                attn_output = self.convert_to_fp16(attn_output)
+            else:
+                attn_weight = self.matmul(query_states, key_states, False, True) / (
+                    math.sqrt(head_dim)
+                )
             attention_mask = self.convert_to_fp16(attention_mask)
             attn_weight = self.eltwise_add(attn_weight, attention_mask)
             attn_weight = self.convert_to_fp32(attn_weight)
