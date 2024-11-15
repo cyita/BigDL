@@ -279,6 +279,7 @@ def lookup_generate(self,
                     generation_config: Optional[GenerationConfig] = None,
                     streamer: Optional["BaseStreamer"] = None,
                     attention_mask=None,
+                    tokenizer=None,
                     **sampling_kwargs):
     from packaging import version
     trans_version = transformers.__version__
@@ -397,6 +398,11 @@ def lookup_generate(self,
 
             n_matches = ((output_ids[:, :-1] != verify_input_ids[:, 1:])
                          .cumsum(-1) == 0).sum(-1).item()
+            
+            if tokenizer is not None:
+                c = tokenizer.batch_decode(verify_input_ids)
+                o = tokenizer.batch_decode(output_ids)
+                print(f"candidate: {c}, verify: {o}, match: {n_matches} ")
 
             max_matched = n_matches + 1
             mot = time.time()
@@ -408,12 +414,16 @@ def lookup_generate(self,
             self.n_matched += n_matches
             self.n_drafted += candidate_length
 
+            past_key_values_shape = past_key_values[0][0].shape
+
             # Clean up target model KV cache
             if max_of_max_matched != max_matched:
                 output_ids = output_ids[:, :max_matched]
                 new_cache_size = max_of_max_matched - max_matched
                 past_key_values = _crop_past_key_values(self, past_key_values,
                                                         new_cache_size)
+                
+            print(f"kv shape 1: {past_key_values_shape}, kv shape 2: {past_key_values[0][0].shape}")
 
             accept_rate = self.n_matched/self.n_drafted if self.n_drafted > 0 else 1
             self.accept_rate.append(accept_rate)
@@ -424,6 +434,7 @@ def lookup_generate(self,
 
             input_ids = torch.cat((input_ids, output_ids), dim=-1)
             candidates_generator.update_look_up_table(input_ids)
+            print(f"input id shape: {input_ids.shape}")
 
             step += output_ids.size(1)
             step_verify += 1
