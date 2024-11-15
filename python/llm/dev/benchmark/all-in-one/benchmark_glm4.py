@@ -64,15 +64,15 @@ if __name__ == '__main__':
             input_ids = \
                 torch.cat((full_inputs.input_ids[:, :half_idx], full_inputs.input_ids[:, -(in_len-half_idx):]), dim=1)
             
-            # print("---Start warmup---")
-            # # warmup for each input length
-            # output_ids = model.generate(
-            #     input_ids,
-            #     max_new_tokens=args.n_predict,
-            #     do_sample=False,
-            #     tokenizer=tokenizer
-            # )
-            # print("---Warmup finish---")
+            print("---Start warmup---")
+            # warmup for each input length
+            output_ids = model.generate(
+                input_ids,
+                max_new_tokens=args.n_predict,
+                do_sample=False,
+                tokenizer=tokenizer
+            )
+            print("---Warmup finish---")
 
             streamer = TextStreamer(tokenizer, skip_prompt=True)
             first_token_list = []
@@ -83,9 +83,9 @@ if __name__ == '__main__':
                 output_ids = model.generate(
                     input_ids,
                     max_new_tokens=args.n_predict, 
-                    streamer=streamer, 
+                    # streamer=streamer, 
                     do_sample=False,
-                    tokenizer=tokenizer
+                    # tokenizer=tokenizer
                 )
                 torch.xpu.synchronize()
                 end = time.perf_counter()
@@ -96,6 +96,7 @@ if __name__ == '__main__':
                 ]
 
                 output_str = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+                print(output_str)
 
                 first_token_latency = model.first_token_time
                 rest_token_latency = (end - st - model.first_token_time)/(model.n_token_generated - 1)
