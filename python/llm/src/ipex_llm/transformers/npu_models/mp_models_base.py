@@ -311,7 +311,8 @@ class LLMBaseNNFactory(NNFactory):
             attn_output, hidden_size, hidden_size, bias=False, wt_dtype=self.dtype,
             n_splits=self.n_splits_linear,
             scale_factor=(self.group_size == 0),
-            is_prefill=(mode == "prefill")
+            is_prefill=(mode == "prefill"),
+            use_dq=False
         )
         return attn_output, new_key_states, new_value_states
 
@@ -479,13 +480,15 @@ class LLMBaseNNFactory(NNFactory):
             hidden_states, self.intermediate_size, self.hidden_size, bias=False,
             wt_dtype=self.dtype, n_splits=self.n_splits_linear,
             scale_factor=(self.group_size == 0),
-            is_prefill=(mode == "prefill")
+            is_prefill=(mode == "prefill"),
+            use_dq=False
         )
         mm2 = self.linear(
             hidden_states, self.intermediate_size, self.hidden_size, bias=False,
             wt_dtype=self.dtype, n_splits=self.n_splits_linear,
             scale_factor=(self.group_size == 0),
-            is_prefill=(mode == "prefill")
+            is_prefill=(mode == "prefill"),
+            use_dq=False
         )  # type: ignore[attr-defined]
         mm1 = self.eltwise_mul(self.swish(mm1), mm2)  # type: ignore[attr-defined]
 
@@ -493,7 +496,8 @@ class LLMBaseNNFactory(NNFactory):
             mm1, self.hidden_size, self.intermediate_size, bias=False, wt_dtype=self.dtype,
             n_splits=self.n_splits_down_proj,
             scale_factor=(self.group_size == 0),
-            is_prefill=(mode == "prefill")
+            is_prefill=(mode == "prefill"),
+            use_dq=False
         )
         return hidden_states
 
