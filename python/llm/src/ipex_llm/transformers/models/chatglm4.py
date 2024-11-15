@@ -238,6 +238,7 @@ def chatglm4_attention_forward(
     attn_weights = None
     if use_sdp(q_len, kv_seq_len, head_dim, query_states):
         import xe_addons
+        attention_mask = None
         if use_compresskv:
             attention_mask = get_compresskv_attn_mask(key_states, attention_mask)
         if use_quantize_kv:
