@@ -5,6 +5,9 @@
 #include <filesystem>
 #include <vector>
 #include<iostream>
+#include <chrono>
+
+using namespace std::chrono;
 
 #ifdef _WIN32
 #define PATH_SEP '\\'
@@ -52,7 +55,13 @@ int main(int argc, char ** argv) {
 
     llama_model_params model_params = llama_model_params_from_gpt_params(params);
 
+    auto start = high_resolution_clock::now();
+
     llama_model * model = llama_load_model_from_file(params.model.c_str(), model_params);
+
+    auto load_stop = high_resolution_clock::now();
+    auto duration = duration_cast<milliseconds>(load_stop - start);
+    std::cout << "Model load: " << (double)duration.count() << " ms." << std::endl;
 
     if (model == NULL) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);
@@ -61,14 +70,16 @@ int main(int argc, char ** argv) {
 
     // initialize the context
 
-    llama_context_params ctx_params = llama_context_params_from_gpt_params(params);
+    // llama_context_params ctx_params = llama_context_params_from_gpt_params(params);
 
-    llama_context * ctx = llama_new_context_with_model(model, ctx_params);
+    // llama_context * ctx = llama_new_context_with_model(model, ctx_params);
 
-    if (ctx == NULL) {
-        fprintf(stderr , "%s: error: failed to create the llama_context\n" , __func__);
-        return 1;
-    }
+    // if (ctx == NULL) {
+    //     fprintf(stderr , "%s: error: failed to create the llama_context\n" , __func__);
+    //     return 1;
+    // }
+
+    auto t2 = high_resolution_clock::now();
 
     std::string output_dir = params.npu_outfile;
     std::filesystem::path dirPath = output_dir;
@@ -93,11 +104,23 @@ int main(int argc, char ** argv) {
     }
 
     std::cout << "\033[32mConverting GGUF model to " <<  params.low_bit << " NPU model...\033[0m" << std::endl;
+    
+    auto t3 = high_resolution_clock::now();
     convert_gguf_to_npu_weight(model, weight_path.c_str(), type);
+
+    auto t4 = high_resolution_clock::now();
+
+    std::cout << "Create dir: " << (double)duration_cast<milliseconds>(t3 - t2).count() << " ms." << std::endl;
+
+    auto d2 = duration_cast<milliseconds>(t4 - t3);
+    std::cout << "Model convert: " << (double)d2.count() << " ms." << std::endl;
+
+    auto d3 = duration_cast<milliseconds>(t4 - start);
+    std::cout << "Model convert: " << (double)d3.count() << " ms." << std::endl;
 
     std::cout << "\033[32mModel weights saved to " << weight_path << "\033[0m"<< std::endl;
 
-    llama_free(ctx);
+    // llama_free(ctx);
     llama_free_model(model);
 
     llama_backend_free();
