@@ -1,1 +1,1 @@
-build\Release\llama-cli-npu.exe -m "D:\yina\BigDL\python\llm\example\NPU\HF-Transformers-AutoModels\LLM\CPP_Examples\llama3.2-3b-q40"  -n 64 "What is AI?"
+build\Release\llama-cli-npu.exe -m "D:\yina\BigDL\python\llm\example\NPU\HF-Transformers-AutoModels\LLM\CPP_Examples\llama3.2-3b-q40"  -n 32 "What is AI?"
