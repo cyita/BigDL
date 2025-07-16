@@ -713,7 +713,7 @@ class LowBitLinear(nn.Linear):
             result = result.view(new_shape)
 
             if self.mp_group is not None:
-                if get_use_vllm():
+                if get_use_vllm() or get_use_sglang():
                     result = self.mp_group.all_reduce(result)
                 elif is_deepspeed_available():
                     from deepspeed import comm as dist
